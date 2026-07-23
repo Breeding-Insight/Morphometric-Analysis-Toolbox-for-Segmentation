@@ -1,0 +1,17 @@
+# Conda environment for MATs. Conda is recommended over pip because it installs
+# the system `zbar` library that pyzbar needs (the usual pip pain point).
+#
+#   conda env create -f environment.yml
+#   conda activate mats
+#   pip install -e ".[app]"
+#   mats fetch-weights
+#   mats doctor
+name: mats
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - zbar            # system library required by pyzbar
+  - pip:
+      - -e ".[app]"    # includes huggingface_hub for `mats fetch-weights`

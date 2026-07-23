@@ -1,0 +1,16 @@
+---
+# "basic" gives us a generic web-server connection: Batch Connect picks a free
+# $port, records $host, and writes connection.yml for the view.
+batch_connect:
+  template: "basic"
+
+# SLURM directives. Adjust flag names if your scheduler differs (e.g. PBS/LSF).
+script:
+  native:
+    - "--partition=<%= partition %>"
+    - "--cpus-per-task=<%= num_cores %>"
+    - "--mem=<%= memory_gb %>G"
+    - "--time=<%= bc_num_hours.to_i %>:00:00"
+<%- if gpu_count.to_i > 0 -%>
+    - "--gpus=<%= gpu_count.to_i %>"
+<%- end -%>

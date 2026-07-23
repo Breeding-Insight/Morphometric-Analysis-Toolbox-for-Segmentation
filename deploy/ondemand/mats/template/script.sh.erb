@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ===========================================================================
+# Customize these lines for your cluster, then everything else works.
+# ===========================================================================
+CONDA_SH="${HOME}/miniconda3/etc/profile.d/conda.sh"      # path to conda.sh
+CONDA_ENV="mats"                                          # env with mats installed
+# Some clusters use modules instead of a personal conda, e.g.:
+#   module load miniconda3 && source activate "${CONDA_ENV}"
+# ===========================================================================
+
+source "${CONDA_SH}"
+conda activate "${CONDA_ENV}"
+
+# Harmless on CUDA; only used by the Apple MPS fallback path.
+export PYTORCH_ENABLE_MPS_FALLBACK=1
+export STREAMLIT_SERVER_HEADLESS=true
+export STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+
+# Weights are looked for in ~/.cache/mats/weights by default. On a cluster,
+# point at a shared copy (e.g. SCINet /project) so every job reads it in place:
+export MATS_WEIGHTS_DIR="/project/CHANGE_ME_project/mats_weights"
+# Weights are pre-staged there; don't let an interactive session download 2.65 GB.
+export MATS_NO_AUTO_FETCH=1
+# Or override individual checkpoints:
+# export RF_DETR_MARKER_CHECKPOINT="/path/to/rf_detr_marker.pth"
+# export BIREFNET_CHECKPOINT="/path/to/birefnet_leaf.pth"
+
+# `mats app` works from any directory (no cd required). We cd to $HOME only so
+# relative output paths a user types in the UI land somewhere writable.
+cd "${HOME}"
+
+# Batch Connect exports $host and $port. Streamlit must bind 0.0.0.0:$port and
+# serve under the OOD reverse-proxy path so its /static assets and websocket
+# resolve. This assumes the relative-node proxy (/rnode/...). If your center
+# uses the absolute proxy (/node/...), drop --server.baseUrlPath entirely.
+mats app \
+  --server.address 0.0.0.0 \
+  --server.port "${port}" \
+  --server.baseUrlPath "rnode/${host}/${port}" \
+  --server.enableCORS false \
+  --server.enableXsrfProtection false \
+  --browser.gatherUsageStats false

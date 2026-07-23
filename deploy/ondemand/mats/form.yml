@@ -1,0 +1,47 @@
+---
+# Replace with the cluster id as named in /etc/ood/config/clusters.d/<id>.yml
+cluster: "CHANGE_ME_cluster_name"
+
+attributes:
+  bc_num_hours:
+    widget: number_field
+    label: "Walltime (hours)"
+    value: 4
+    min: 1
+    max: 24
+
+  partition:
+    widget: select
+    label: "Partition"
+    help: "Pick a GPU partition for fast BiRefNet inference; CPU works but is slow."
+    options:
+      - ["GPU", "CHANGE_ME_gpu_partition"]
+      - ["CPU", "CHANGE_ME_cpu_partition"]
+
+  gpu_count:
+    widget: number_field
+    label: "GPUs (set 0 on a CPU partition)"
+    value: 1
+    min: 0
+    max: 2
+
+  num_cores:
+    widget: number_field
+    label: "CPU cores"
+    value: 4
+    min: 1
+    max: 32
+
+  memory_gb:
+    widget: number_field
+    label: "Memory (GB)"
+    value: 16
+    min: 4
+    max: 128
+
+form:
+  - bc_num_hours
+  - partition
+  - gpu_count
+  - num_cores
+  - memory_gb

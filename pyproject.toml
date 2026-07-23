@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mats-morpho"
+version = "1.0.0"
+description = "Field morphometric tools: RF-DETR marker detection + BiRefNet leaf segmentation from photos of a printed calibration template."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "A.J. Ackerman" }]
+keywords = ["plant phenomics", "morphometrics", "leaf area", "segmentation", "RF-DETR", "BiRefNet"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Intended Audience :: Science/Research",
+]
+
+# Runtime dependencies for the pipeline + CLI. On Linux, pyzbar also needs the
+# system library `zbar` (apt: libzbar0; conda: `conda install -c conda-forge zbar`).
+dependencies = [
+    "rfdetr",
+    "qreader",
+    "transformers",
+    "torch",
+    "torchvision",
+    "opencv-python",
+    "pyzbar",
+    "pillow",
+    "numpy",
+    "tqdm",
+    "huggingface_hub>=0.23",
+]
+
+[project.optional-dependencies]
+# The Streamlit GUI and the Template Creator page.
+app = ["streamlit", "reportlab", "qrcode"]
+# Development / testing (no torch needed for the dependency-light tests).
+dev = ["pytest"]
+
+[project.scripts]
+mats = "mats.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation"
+Issues = "https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mats = ["app/assets/*.svg"]

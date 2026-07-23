@@ -1,67 +1,192 @@
-# Automated Analysis of Leaf Morphometrics
-*Version 7, 10-31-23*
+# MATs — Morphometric Analysis Tools
 
-## Summary
-Develop a model to measure leaf morphometrics from photos taken outside in field books and test if accuracy is comparable to images taken in a photo booth.
-## Goals
-Measure height, width, leaf area, serration count, and leaflet count. Once accuracy is found to be acceptable, experiment with other morphometrics such as individual leaflet widths. 
-## Getting Started
-Leaf morphometrics tools uses packages that can be installed by package manager Anaconda to accomplish analyses. For questions or help with Anaconda, read the following:
-[Getting started with conda — conda 23.9.1.dev37 documentation](https://conda.io/projects/conda/en/latest/user-guide/getting-started.html)
-### Installation
-1. Create and activate a conda environment using leaf_morphometrics_tools: 
-   1. This is best accomplished through Mamba rather than Conda, as Mamba is much quicker. If installing Mamba is difficult, conda works fine, just slower. Miniconda/Minimamba works as well and can save room on your local computer.
-      1. Conda: [Installation — Anaconda documentation](https://docs.anaconda.com/free/anaconda/install/index.html)
-      2. Mamba: [Installation — documentation](https://mamba.readthedocs.io/en/latest/installation.html)
-         1. If using mamba, replace all ‘conda’ calls in your prompt with ‘mamba’
-   2. Once Conda/Mamba/Miniconda/Minimamba is installed and operational, type the following to create the environment to create the environment:
-   
-```
-conda env create -f /my/path/to/leaf_morphometrics_tools/leaf_morphometrics_tools.yml
-```
-*replace* /my/path/to/ *with the path to leaf_morphometrics_tools/leaf_mophometrics_tools.yml on your local computer*
+Measure leaf **area, length, and width** in real-world units from a photo of
+leaves laid on a printed calibration template. MATs finds four fiducial markers
+with RF-DETR, corrects perspective, segments each leaf with BiRefNet (or a fast
+Otsu threshold), and writes a measurements CSV.
 
-3. Type the following to activate the leaf_morphometrics_tools environment:
-   1. conda activate leaf_morphometrics-env
-### Running in parallel over a collection of images - guided intro
-1. The pipeline was made to use parallel computing to be run over a folder that includes all images taken within a study. To accomplish this, run the following from the command line prompt:
+Pipeline in one line: **detect markers → perspective-correct → segment leaf →
+measure → CSV**.
 
-```
-python /my/path/to/leaf_morphometrics_tools/leaf_morphoV6_12x16.py
+> Companion code for the manuscript (target journal: *Plant Phenomics*).
+> Model weights are hosted on Hugging Face (see [Model weights](#model-weights)).
+
+---
+
+## Install
+
+MATs needs Python ≥ 3.9 and the system library `zbar` (for QR decoding). Conda
+handles `zbar` for you and is the recommended route.
+
+**Conda (recommended):**
+
+```bash
+git clone https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation.git
+cd Morphometric-Analysis-Toolbox-for-Segmentation
+conda env create -f environment.yml     # env "mats", includes zbar
+conda activate mats
+pip install -e ".[app]"                  # ".[app]" adds the Streamlit GUI
 ```
 
-*To use the pipeline for 12x12in templates type the following:*
+**pip:**
 
-```
-python /my/path/to/leaf_morphometrics_tools/leaf_morphoV6_12x12.py
+```bash
+pip install -e ".[app]"
+# then install zbar yourself:  Linux: apt install libzbar0
+#                              macOS: brew install zbar
 ```
 
-3. Entering the above code into a command line prompt will spawn a guided intro for running the pipeline over a collection of images.
-4. An image with the word ‘calibrate’ in the filename is required for each pool of images. This image calibrates the expected pixels per inch in every image, helping to ID the red size markers on templates in various lighting conditions. This image should be of a blank template (no leaves), in good lighting, and should be taken by the camera the observer intends to use to capture images. 
-   1. Examples of calibrate image filenames:
-      1. calibrate.jpg
-      2. NY1234_calibrate.jpg
-      3. calibrate_IA999.png
-      4. 1234_SC_calibrate.nef
-### Running in parallel over a collection of images - manual argument input
-Leaf morphometrics tools can take a variety of optional arguments for running leaf analyses. Most of these are requested for input in the guided intro, but can be manually input following the Python call:
-```
--h, --help            show this help message and exit
--i INPUT_DIR, --input_dir INPUT_DIR
-                        Path to input directory of images to be analyzed.
--t TOOLS_DIR, --tools_dir TOOLS_DIR
-                        Path to leaf_morpho_tools file.
--o OUTPUT_DIR, --output_dir OUTPUT_DIR
-                        Path to output directory for resulting images.
- -r RESULTS_PATH, --results_path RESULTS_PATH
-                        Desired path and file name for results.
- -w WORKERS, --workers WORKERS
-                        Number of worker processes to use, if nothing is
-                        specified half of all available workers will be used.
-```
-#### To enter all arguments manually, the Python call would resemble the following:
-python /my/path/to/leaf_morphometrics_tools/leaf_morphoV7.py -i /my/path/to/inputImages -t my/path/to/leaf_morpho_tools -o /my/path/to/imageOutput -r /my/path/to/theseAreMyResults.csv -w 12
-#### To display these options in the command line prompt, enter the following:
-python /my/path/to/leaf_morphometrics_tools/leaf_morphoV7.py -h
+Then fetch the model weights once and confirm the environment:
 
+```bash
+mats fetch-weights      # downloads ~2.6 GB to ~/.cache/mats/weights
+mats doctor             # checks weights, GPU/CPU device, zbar
+```
 
+---
+
+## Choose your path
+
+- **I want to click buttons →** [Using the app](#using-the-app)
+- **I want to script it →** [Using the command line](#using-the-command-line)
+
+Both run the exact same pipeline and produce the same measurements.
+
+---
+
+## Using the app
+
+```bash
+mats app
+```
+
+This opens the Streamlit GUI in your browser. From there:
+
+1. **Pick images** — a local folder, or drag-and-drop uploads.
+2. **Set the scale** — type the observation-box size (e.g. `10.5x9.5in`) or
+   leave it blank to read it from the template's QR code automatically.
+3. **Choose segmentation** — BiRefNet (accurate) or Otsu threshold (fast).
+4. **Run**, then preview results and download a CSV or a ZIP of masks + boxes.
+
+**Printing templates.** The app has a **Template Creator** page (in the sidebar)
+that generates a print-ready PDF at any canvas/box size, with correctly colored
+corner markers and a QR code encoding the box dimensions. Print it at 100%
+scale (no "fit to page"), lay your leaves inside the box, and photograph it flat.
+See [docs/templates.md](docs/templates.md).
+
+---
+
+## Using the command line
+
+```bash
+mats run -i ./images -o ./out -r results.csv -t 10.5x9.5in
+```
+
+Common options (full reference in [docs/cli.md](docs/cli.md)):
+
+| Flag | Meaning | Default |
+|---|---|---|
+| `-i, --input_dir` | Folder of images to measure | prompt |
+| `-o, --output_dir` | Where masks / target boxes are written | prompt |
+| `-r, --results_path` | Measurement CSV path | `./leaf_morpho_results.csv` |
+| `-t, --template_dimensions` | Box size, `<w>x<h><unit>` (else read from QR) | QR fallback |
+| `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast) | `birefnet` |
+| `--threshold-level` | `auto` (Otsu) / `low` / `medium` / `high` | `auto` |
+| `--csv-schema` | `full` (all scale conventions) or `compact` | `full` |
+| `-w, --workers` | Parallel workers (threshold path only) | auto |
+| `--save-axes` | Also save length/width overlay images for QC | off |
+
+**Choosing a segmentation method.** `birefnet` is the accurate default and uses
+a GPU when available (CPU works but is slow). `threshold` is much faster and
+good for clean, high-contrast backgrounds where a leaf sits on plain white.
+
+---
+
+## Outputs
+
+Per image, in the output folder:
+
+- `{sample_id}_target_box.jpg` — the perspective-corrected observation box
+- `{sample_id}_mask.png` — the leaf segmentation mask
+
+Plus a measurements CSV. Two schemas:
+
+- **full** (default, research schema) — leaf area, width, and length under three
+  scale calibrations (mean, width-based, height-based) with the pixels-per-cm
+  factors. This matches the columns the analysis scripts expect.
+- **compact** — `sample_id, area_cm2, height_cm, length_cm`.
+
+A `leaf_morpho_failures.csv` records per-image warnings and failures.
+
+---
+
+## Model weights
+
+The checkpoints are too large for GitHub, so they are hosted on Hugging Face and
+resolved at runtime:
+
+| Model | File | Size |
+|---|---|---|
+| RF-DETR marker detector | `rf_detr_marker.pth` | ~134 MB |
+| BiRefNet leaf segmenter | `birefnet_leaf.pth` | ~2.65 GB |
+
+You don't have to fetch them manually — the **first run downloads them once** to
+`~/.cache/mats/weights` and caches them. `mats fetch-weights` just does it up
+front. Three delivery options, picked automatically:
+
+- **Auto-fetch (default)** — downloads from Hugging Face on first use.
+- **Shared filesystem** — set `MATS_WEIGHTS_DIR` (e.g. a SCINet `/project` path)
+  to read weights in place with no per-user copy.
+- **Git LFS** — optionally keep them in `weights/` in your checkout.
+
+Set `MATS_NO_AUTO_FETCH=1` to disable the automatic download (e.g. on an HPC login
+node). Full detail, DOI, and checksums: [docs/weights.md](docs/weights.md).
+
+---
+
+## On a cluster (HPC / Open OnDemand)
+
+An Open OnDemand Batch Connect app that serves the GUI on a compute node is in
+[deploy/ondemand/mats/](deploy/ondemand/mats/). See its README and
+[docs/hpc.md](docs/hpc.md).
+
+---
+
+## How it works
+
+MATs chains two models. **RF-DETR** (fine-tuned, single "Marker" class) detects
+the four corner fiducials at 1120×1120 px; their centroids define a homography
+that rectifies the observation box and fixes the pixels-per-cm scale.
+**BiRefNet** (fine-tuned for leaf foreground) then segments the leaf, from which
+area (pixel count) and length/width (bounding dimensions) are computed and
+converted to centimeters. A classic Otsu threshold is offered as a fast
+alternative to BiRefNet. See the manuscript for training and evaluation detail.
+
+---
+
+## Troubleshooting
+
+Run `mats doctor` first — it reports most of these.
+
+- **`zbar` / pyzbar not found** — install the system library (conda:
+  `conda install -c conda-forge zbar`; Linux: `apt install libzbar0`;
+  macOS: `brew install zbar`).
+- **CUDA out of memory** — use `--mask-method threshold`, or process in smaller
+  batches.
+- **No markers detected** — check print quality and that the marker color
+  matches the template (the Template Creator uses the trained color); make sure
+  all four corners are in frame.
+- **Blank page on Open OnDemand** — almost always the reverse-proxy
+  `baseUrlPath` mismatch; see [deploy/ondemand/mats/README.md](deploy/ondemand/mats/README.md).
+
+---
+
+## Citing
+
+If you use MATs, please cite the manuscript and the Hugging Face weights deposit.
+See [CITATION.cff](CITATION.cff).
+
+## License
+
+[MIT](LICENSE). The pipeline builds on RF-DETR (Apache-2.0) and BiRefNet (MIT);
+see [docs/weights.md](docs/weights.md) for model provenance.

@@ -1,0 +1,10 @@
+# Optional Git LFS support for model weights.
+#
+# MATs does NOT commit the checkpoints to this public repo by default -- they are
+# hosted on Hugging Face and fetched with `mats fetch-weights` (see docs/weights.md).
+# Committing the 2.65 GB BiRefNet checkpoint here would force every `git clone` to
+# download it and would spend the repo's LFS bandwidth quota.
+#
+# This rule only takes effect if you deliberately place weights under weights/ and
+# commit them (e.g. in a private mirror). It is inert otherwise.
+weights/*.pth filter=lfs diff=lfs merge=lfs -text

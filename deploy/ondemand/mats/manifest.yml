@@ -1,0 +1,8 @@
+---
+name: MATs — Morphometric Analysis Tools
+category: Interactive Apps
+subcategory: Servers
+role: batch_connect
+description: |
+  RF-DETR fiducial-marker detection + BiRefNet leaf segmentation, served as a
+  Streamlit web app on a compute node via Open OnDemand Batch Connect.

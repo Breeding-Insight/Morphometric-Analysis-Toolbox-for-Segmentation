@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img"
+     aria-label="MATs mark: detection box framing a leaf">
+  <title>MATs — Morphometric Analysis Tools</title>
+  <!-- edit this one value to recolor the whole mark -->
+  <style>
+    .ink { fill: none; stroke: #25463d; stroke-linecap: round; stroke-linejoin: round; }
+    .box  { stroke-width: 4; }
+    .blade{ stroke-width: 4; }
+    .rib  { stroke-width: 3; }
+    .vein { stroke-width: 2.4; }
+  </style>
+
+  <!-- detection corner brackets (RF-DETR bounding-box motif) -->
+  <g class="ink box">
+    <path d="M14,44 L14,14 L44,14"/>
+    <path d="M156,14 L186,14 L186,44"/>
+    <path d="M14,156 L14,186 L44,186"/>
+    <path d="M156,186 L186,186 L186,156"/>
+  </g>
+
+  <!-- line-art leaf (BiRefNet segmentation motif) -->
+  <g class="ink" transform="rotate(-12 100 100)">
+    <path class="blade" d="M100,158 C66,132 66,74 100,42 C134,74 134,132 100,158 Z"/>
+    <path class="rib"   d="M100,155 L100,47"/>
+    <path class="vein"  d="M100,135 C90,132 82,126 76,118"/>
+    <path class="vein"  d="M100,135 C110,132 118,126 124,118"/>
+    <path class="vein"  d="M100,112 C92,109 86,104 81,97"/>
+    <path class="vein"  d="M100,112 C108,109 114,104 119,97"/>
+    <path class="vein"  d="M100,90 C94,87 90,83 86,77"/>
+    <path class="vein"  d="M100,90 C106,87 110,83 114,77"/>
+  </g>
+</svg>

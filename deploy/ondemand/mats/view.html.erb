@@ -1,0 +1,8 @@
+<%-
+  # Relative-node reverse proxy. If your OOD instance uses the absolute proxy,
+  # change "rnode" to "node" here AND remove --server.baseUrlPath in script.sh.erb.
+  base = "/rnode/#{host}/#{port}"
+-%>
+<a class="btn btn-primary btn-block" href="<%= base %>/" target="_blank" rel="noopener noreferrer">
+  Connect to MATs
+</a>

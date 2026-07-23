@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (no heavy deps)
+        # The dependency-light tests (dimensions, CLI parsing, path resolution)
+        # do not need torch/rfdetr, so install the package without dependencies
+        # plus pytest. This keeps CI fast and avoids the multi-GB torch stack.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-deps -e .
+          python -m pip install pytest
+      - name: Run tests
+        run: python -m pytest tests/ -q
