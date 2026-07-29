@@ -7,11 +7,12 @@ compute node and exposes it through the Open OnDemand reverse proxy.
 
 1. **A conda env with MATs installed.** From a clone of the repo:
    ```bash
-   conda env create -f environment.yml     # creates env "mats" (includes zbar)
+   conda env create -f environment.yml     # creates env "mats"
    conda activate mats
-   pip install -e ".[app]"
+   pip install -e ".[app]"                  # add ",qr" for enhanced QR reading
    ```
    Then set `CONDA_ENV` in `template/script.sh.erb` to that env name (`mats`).
+   (A plain virtualenv works too — the default install needs no system libs.)
 2. **The model checkpoints.** Fetch them once, ideally to a shared location:
    ```bash
    export MATS_WEIGHTS_DIR=/shared/models/mats
@@ -19,9 +20,10 @@ compute node and exposes it through the Open OnDemand reverse proxy.
    mats doctor            # confirm they resolve
    ```
    Point the same `MATS_WEIGHTS_DIR` at that path in `template/script.sh.erb`.
-3. On Linux, `pyzbar` needs the system lib `zbar`. The conda env above installs
-   it; otherwise `conda install -c conda-forge zbar` or the distro package
-   (`libzbar0`).
+3. *(Optional)* Enhanced QR reading (`pip install -e ".[qr]"`) adds the `pyzbar`
+   backend, which needs the system lib `zbar` — the conda env above includes it;
+   otherwise `conda install -c conda-forge zbar` or the distro package
+   (`libzbar0`). The default OpenCV decoder needs no system library.
 
 Note: `mats app` runs from any directory, so — unlike the old launcher — there
 is no repo path to configure. Only the conda env and (optionally) the weights

@@ -241,11 +241,19 @@ def doctor():
     except Exception as exc:
         print(f"torch:              NOT importable ({exc})")
 
-    try:
-        import pyzbar.pyzbar  # noqa: F401
-        print("pyzbar/zbar:        ok")
-    except Exception as exc:
-        print(f"pyzbar/zbar:        NOT importable ({exc}) -- install system 'zbar'")
+    # QR decoding backends. OpenCV is the lightweight default; the optional
+    # "enhanced QR" extra  (pip install "mats-morpho[qr]")  adds the pyzbar and
+    # qreader fallbacks for codes OpenCV can't read.
+    backends = []
+    for mod, label in (("cv2", "opencv"), ("pyzbar.pyzbar", "pyzbar"), ("qreader", "qreader")):
+        try:
+            __import__(mod)
+            backends.append(label)
+        except Exception:
+            pass
+    enhanced = "pyzbar" in backends or "qreader" in backends
+    suffix = "" if enhanced else "  (enhanced QR extra not installed -- OpenCV only)"
+    print(f"QR decoding:        {', '.join(backends) or 'NONE (opencv-python missing)'}{suffix}")
 
     if not all_present:
         print("\nSome weights are missing. Run:  mats fetch-weights")

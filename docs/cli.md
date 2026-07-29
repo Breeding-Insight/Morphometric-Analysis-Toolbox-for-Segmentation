@@ -61,8 +61,9 @@ Downloads to `~/.cache/mats/weights` (or `$MATS_WEIGHTS_DIR`). See
 ## `mats doctor`
 
 Prints the resolved checkpoint paths and whether they exist, the Torch version
-and available devices, and whether `pyzbar`/`zbar` load. Run it first whenever
-something is off.
+and available devices, and which QR-decoding backends are available (OpenCV by
+default; `pyzbar`/`qreader` when the optional `qr` extra is installed). Run it
+first whenever something is off.
 
 ## `mats app`
 

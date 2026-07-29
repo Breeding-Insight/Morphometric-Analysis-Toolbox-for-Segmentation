@@ -175,7 +175,7 @@ def main():
         st.info(
             "The Python environment running Streamlit is missing a pipeline "
             f"dependency (`{missing}`). Install MATs with its dependencies "
-            "(rfdetr, qreader, transformers, torch, opencv, pyzbar) and relaunch:\n\n"
+            "(rfdetr, transformers, torch, opencv) and relaunch:\n\n"
             "```\npip install -e .\nmats app\n```"
         )
         st.caption(f"Current interpreter: {sys.executable}")

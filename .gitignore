@@ -29,3 +29,8 @@ env/
 .DS_Store
 .vscode/
 .idea/
+
+# AI-assistant working notes (local-only, not shipped)
+CLAUDE.md
+.claude/
+.agents/

@@ -1,7 +1,7 @@
-# MATs — Morphometric Analysis Tools
+# MATS — Morphometric Analysis Toolbox
 
 Measure leaf **area, length, and width** in real-world units from a photo of
-leaves laid on a printed calibration template. MATs finds four fiducial markers
+leaves laid on a printed calibration template. MATS finds four fiducial markers
 with RF-DETR, corrects perspective, segments each leaf with BiRefNet (or a fast
 Otsu threshold), and writes a measurements CSV.
 
@@ -9,38 +9,45 @@ Pipeline in one line: **detect markers → perspective-correct → segment leaf 
 measure → CSV**.
 
 > Companion code for the manuscript (target journal: *Plant Phenomics*).
-> Model weights are hosted on Hugging Face (see [Model weights](#model-weights)).
+> Model weights are hosted available for download here or usable through hugging face (see [Model weights](#model-weights)).
+> For USDA users the model weights are hosted on Agdatacommons and the pipeline is available on SciNET
 
 ---
 
 ## Install
 
-MATs needs Python ≥ 3.9 and the system library `zbar` (for QR decoding). Conda
-handles `zbar` for you and is the recommended route.
+MATS needs only Python ≥ 3.9 — QR codes are decoded with OpenCV, so the default
+install pulls everything from wheels with **no system libraries and no conda
+required**.
 
-**Conda (recommended):**
+**pip (recommended):**
 
 ```bash
 git clone https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation.git
 cd Morphometric-Analysis-Toolbox-for-Segmentation
-conda env create -f environment.yml     # env "mats", includes zbar
-conda activate mats
 pip install -e ".[app]"                  # ".[app]" adds the Streamlit GUI
 ```
 
-**pip:**
+**Enhanced QR reading (optional).** OpenCV decodes clean codes reliably; for
+tougher photos (glare, skew, blur) you can add the `pyzbar` + `qreader`
+fallbacks. `pyzbar` needs the system library `zbar`:
 
 ```bash
-pip install -e ".[app]"
-# then install zbar yourself:  Linux: apt install libzbar0
-#                              macOS: brew install zbar
+pip install -e ".[app,qr]"
+# then install zbar:  Linux: apt install libzbar0
+#                     macOS: brew install zbar
+#                     conda: conda install -c conda-forge zbar
 ```
+
+If a code can't be read, the pipeline continues — just pass the template size
+manually with `-t` (e.g. `-t 10.5x9.5in`), so enhanced QR is a convenience, not
+a requirement.
 
 Then fetch the model weights once and confirm the environment:
 
 ```bash
-mats fetch-weights      # downloads ~2.6 GB to ~/.cache/mats/weights
-mats doctor             # checks weights, GPU/CPU device, zbar
+mats fetch-weights      # downloads ~2.6 GB to ~/.cache/MATS/weights
+mats doctor             # checks weights, GPU/CPU device, QR backends
 ```
 
 ---
@@ -97,7 +104,7 @@ Common options (full reference in [docs/cli.md](docs/cli.md)):
 | `--save-axes` | Also save length/width overlay images for QC | off |
 
 **Choosing a segmentation method.** `birefnet` is the accurate default and uses
-a GPU when available (CPU works but is slow). `threshold` is much faster and
+a GPU when available (CPU works but is slow, and not suggested). `threshold` is much faster and
 good for clean, high-contrast backgrounds where a leaf sits on plain white.
 
 ---
@@ -131,7 +138,7 @@ resolved at runtime:
 | BiRefNet leaf segmenter | `birefnet_leaf.pth` | ~2.65 GB |
 
 You don't have to fetch them manually — the **first run downloads them once** to
-`~/.cache/mats/weights` and caches them. `mats fetch-weights` just does it up
+`~/.cache/MATS/weights` and caches them. `MATS fetch-weights` just does it up
 front. Three delivery options, picked automatically:
 
 - **Auto-fetch (default)** — downloads from Hugging Face on first use.
@@ -147,14 +154,14 @@ node). Full detail, DOI, and checksums: [docs/weights.md](docs/weights.md).
 ## On a cluster (HPC / Open OnDemand)
 
 An Open OnDemand Batch Connect app that serves the GUI on a compute node is in
-[deploy/ondemand/mats/](deploy/ondemand/mats/). See its README and
+[deploy/ondemand/MATS/](deploy/ondemand/MATS/). See its README and
 [docs/hpc.md](docs/hpc.md).
 
 ---
 
 ## How it works
 
-MATs chains two models. **RF-DETR** (fine-tuned, single "Marker" class) detects
+MATS chains two models. **RF-DETR** (fine-tuned, single "Marker" class) detects
 the four corner fiducials at 1120×1120 px; their centroids define a homography
 that rectifies the observation box and fixes the pixels-per-cm scale.
 **BiRefNet** (fine-tuned for leaf foreground) then segments the leaf, from which
@@ -166,24 +173,26 @@ alternative to BiRefNet. See the manuscript for training and evaluation detail.
 
 ## Troubleshooting
 
-Run `mats doctor` first — it reports most of these.
+Run `MATS doctor` first — it reports most of these.
 
-- **`zbar` / pyzbar not found** — install the system library (conda:
-  `conda install -c conda-forge zbar`; Linux: `apt install libzbar0`;
-  macOS: `brew install zbar`).
+- **QR code not read / measurements need a scale** — the default OpenCV decoder
+  couldn't read the code. Pass the template size manually with `-t` (e.g.
+  `-t 10.5x9.5in`), or add enhanced QR reading: `pip install -e ".[qr]"` plus the
+  `zbar` system lib (Linux: `apt install libzbar0`; macOS: `brew install zbar`;
+  conda: `conda install -c conda-forge zbar`).
 - **CUDA out of memory** — use `--mask-method threshold`, or process in smaller
   batches.
 - **No markers detected** — check print quality and that the marker color
   matches the template (the Template Creator uses the trained color); make sure
   all four corners are in frame.
 - **Blank page on Open OnDemand** — almost always the reverse-proxy
-  `baseUrlPath` mismatch; see [deploy/ondemand/mats/README.md](deploy/ondemand/mats/README.md).
+  `baseUrlPath` mismatch; see [deploy/ondemand/MATS/README.md](deploy/ondemand/MATS/README.md).
 
 ---
 
 ## Citing
 
-If you use MATs, please cite the manuscript and the Hugging Face weights deposit.
+If you use MATS, please cite the manuscript and the Hugging Face weights deposit.
 See [CITATION.cff](CITATION.cff).
 
 ## License

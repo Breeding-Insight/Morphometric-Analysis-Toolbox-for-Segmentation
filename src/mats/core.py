@@ -19,12 +19,25 @@ import cv2
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from pyzbar.pyzbar import decode
 from rfdetr import RFDETRLarge
 from tqdm import tqdm  # type: ignore[import-not-found]
 
-# Local application/library specific imports
-from qreader import QReader
+# Optional "enhanced QR reading" backends. The default install decodes QR codes
+# with OpenCV only (no system libraries). Installing the optional extra --
+#   pip install "mats-morpho[qr]"
+# -- adds the pyzbar and qreader fallbacks, which recover marginal codes (glare,
+# skew, blur) that OpenCV misses. pyzbar additionally needs the system library
+# `zbar`. Both are imported behind a guard so a lightweight install runs fine
+# without either one.
+try:
+    from pyzbar.pyzbar import decode as _pyzbar_decode
+except Exception:  # pragma: no cover - optional dependency (and its system lib)
+    _pyzbar_decode = None
+
+try:
+    from qreader import QReader as _QReader
+except Exception:  # pragma: no cover - optional dependency
+    _QReader = None
 
 # Template-dimension parsing lives in its own dependency-light module so the
 # Template Creator page can import it without pulling in torch/rfdetr/cv2.
@@ -241,14 +254,31 @@ def predict_birefnet_mask(
     )
     return (pred[0, 0].cpu().numpy() > threshold).astype(np.uint8) * 255
 
-# Initialize QReader
-qreader = QReader()
+# QReader instantiation downloads a detector model, so defer it until an
+# enhanced decode is actually needed (and only if the optional extra is present).
+_qreader_instance = None
+
+
+def _get_qreader():
+    """Return a cached QReader, or None when the enhanced extra isn't installed."""
+    global _qreader_instance
+    if _QReader is None:
+        return None
+    if _qreader_instance is None:
+        _qreader_instance = _QReader()
+    return _qreader_instance
+
+
+# True when the optional "enhanced QR reading" extra (pyzbar/qreader) is usable.
+def _enhanced_qr_available():
+    return _pyzbar_decode is not None or _QReader is not None
+
 
 def three_pronged_qr(gray_img):
     # Save retval
     retval = False
     readby = "FAIL"
-    # First attempt with OpenCV
+    # First attempt with OpenCV -- always available, the lightweight default.
     qcd = cv2.QRCodeDetector()
     retval, decoded_info, points, _straight_qrcode = qcd.detectAndDecodeMulti(gray_img)
     if retval:
@@ -256,26 +286,30 @@ def three_pronged_qr(gray_img):
         readby = "OpenCV"
         return retval, decoded_info, points, readby
 
-    # If OpenCV fails, try pyzbar
-    decoded_objects = decode(gray_img)
-    if decoded_objects:
-        for obj in decoded_objects:
-            decoded_info = obj.data.decode("utf-8")
-            points = np.array([[p.x, p.y] for p in obj.polygon])
-            retval = True
-            readby = "pyzbar"
-            return retval, decoded_info, points, readby
+    # Enhanced backends (optional "mats-morpho[qr]" extra). If OpenCV fails and
+    # pyzbar is installed, try it next.
+    if _pyzbar_decode is not None:
+        decoded_objects = _pyzbar_decode(gray_img)
+        if decoded_objects:
+            for obj in decoded_objects:
+                decoded_info = obj.data.decode("utf-8")
+                points = np.array([[p.x, p.y] for p in obj.polygon])
+                retval = True
+                readby = "pyzbar"
+                return retval, decoded_info, points, readby
 
-    # If pyzbar fails, try qreader
-    decoded_info = qreader.detect_and_decode(image=gray_img)
-    decoded_info = decoded_info[0]
-    decoded_list = qreader.detect(image=gray_img)
-    if decoded_list:
-        quad_xy_list = [info['quad_xy'] for info in decoded_list]
-        points = np.array(quad_xy_list).astype(np.int64).squeeze()
-        retval = True
-        readby = "qreader"
-        return retval, decoded_info, points, readby
+    # If pyzbar fails or is unavailable, try qreader when it's installed.
+    _qr = _get_qreader()
+    if _qr is not None:
+        decoded_info = _qr.detect_and_decode(image=gray_img)
+        decoded_info = decoded_info[0]
+        decoded_list = _qr.detect(image=gray_img)
+        if decoded_list:
+            quad_xy_list = [info['quad_xy'] for info in decoded_list]
+            points = np.array(quad_xy_list).astype(np.int64).squeeze()
+            retval = True
+            readby = "qreader"
+            return retval, decoded_info, points, readby
 
     if not retval:
         return retval, None, None, readby
@@ -848,7 +882,12 @@ def leaf_morpho(
 
             # Extract QR elements
             if not retval:
-                print(f"[leaf_morpho] WARN '{input_image}': QR code not found/readable; continuing without QR rotation")
+                hint = ("supply template dimensions (CLI -t, e.g. -t 10.5x9.5in, or "
+                        "the GUI's dimensions field) to measure without a QR code")
+                if not _enhanced_qr_available():
+                    hint += ('; for tougher codes, install enhanced QR reading:  '
+                             'pip install "mats-morpho[qr]"')
+                print(f"[leaf_morpho] WARN '{input_image}': QR code not found/readable -- {hint}.")
                 warnings.append(f"{stage}: QR not found/readable")
                 scale_failure = f"{stage}: QR not found/readable"
                 decoded_info = None

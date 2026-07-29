@@ -1,9 +1,16 @@
-# Conda environment for MATs. Conda is recommended over pip because it installs
-# the system `zbar` library that pyzbar needs (the usual pip pain point).
+# Optional conda environment for MATs. Conda is NOT required: the default install
+# decodes QR codes with OpenCV and pulls everything from wheels, so a plain
+# virtualenv works too --
+#
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install -e ".[app]"
+#
+# This file is a convenience for users who prefer conda, or who want the optional
+# "enhanced QR reading" extra (pyzbar), which needs the system `zbar` library:
 #
 #   conda env create -f environment.yml
 #   conda activate mats
-#   pip install -e ".[app]"
+#   pip install -e ".[app,qr]"    # [qr] adds the pyzbar/qreader QR fallbacks
 #   mats fetch-weights
 #   mats doctor
 name: mats
@@ -12,6 +19,6 @@ channels:
 dependencies:
   - python=3.10
   - pip
-  - zbar            # system library required by pyzbar
+  - zbar            # system library for the optional [qr] extra's pyzbar backend
   - pip:
-      - -e ".[app]"    # includes huggingface_hub for `mats fetch-weights`
+      - -e ".[app]"    # add ",qr" -> ".[app,qr]" to enable enhanced QR reading

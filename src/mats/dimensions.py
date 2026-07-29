@@ -2,7 +2,7 @@
 
 Deliberately dependency-light: this module imports only the standard library so
 that the Streamlit Template Creator page can parse and validate template sizes
-without importing :mod:`mats.core` (which pulls in torch, rfdetr, cv2, pyzbar and
+without importing :mod:`mats.core` (which pulls in torch, rfdetr, cv2 and
 transformers). Keep it that way -- do not add heavy imports here.
 """
 
