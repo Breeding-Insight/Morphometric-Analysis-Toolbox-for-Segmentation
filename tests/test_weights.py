@@ -1,6 +1,7 @@
 """Weights resolution / fetch logic -- no network, no torch."""
 
 import importlib
+from pathlib import Path
 
 import pytest
 
@@ -10,13 +11,28 @@ LFS_POINTER = (
 )
 
 
-def _fresh_weights(monkeypatch, **env):
-    """Reload mats.paths + mats.weights under a controlled environment."""
+def _fresh_weights(monkeypatch, tmp_path, **env):
+    """Reload mats.paths + mats.weights under a controlled environment.
+
+    Also isolates path resolution from real files outside tmp_path: the repo
+    checkout permanently ships a real weights/rf_detr_marker.pth (see
+    docs/weights.md -- it's committed via Git LFS since HF auto-fetch isn't
+    wired up yet), and a local dev machine may also have a real
+    weights/birefnet_leaf.pth on disk. Neither should leak into tests that
+    want to simulate "nothing present" -- only files the test itself writes
+    under tmp_path should be visible.
+    """
     for key in ("MATS_WEIGHTS_DIR", "XDG_CACHE_HOME", "MATS_NO_AUTO_FETCH",
                 "RF_DETR_MARKER_CHECKPOINT", "BIREFNET_CHECKPOINT"):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
+    real_is_file = Path.is_file
+    tmp_str = str(tmp_path)
+    monkeypatch.setattr(
+        Path, "is_file",
+        lambda self: real_is_file(self) if str(self).startswith(tmp_str) else False,
+    )
     import mats.paths as paths
     importlib.reload(paths)
     import mats.weights as weights
@@ -24,7 +40,7 @@ def _fresh_weights(monkeypatch, **env):
 
 
 def test_lfs_pointer_detected(monkeypatch, tmp_path):
-    weights = _fresh_weights(monkeypatch, MATS_WEIGHTS_DIR=str(tmp_path))
+    weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
     stub = tmp_path / "birefnet_leaf.pth"
     stub.write_bytes(LFS_POINTER)
     assert weights.looks_like_lfs_pointer(stub) is True
@@ -35,13 +51,13 @@ def test_lfs_pointer_detected(monkeypatch, tmp_path):
 
 
 def test_pointer_is_not_counted_present(monkeypatch, tmp_path):
-    weights = _fresh_weights(monkeypatch, MATS_WEIGHTS_DIR=str(tmp_path))
+    weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
     (tmp_path / "rf_detr_marker.pth").write_bytes(LFS_POINTER)
     assert weights._is_present(tmp_path / "rf_detr_marker.pth") is False
 
 
 def test_fetch_without_repo_prints_manual(monkeypatch, tmp_path, capsys):
-    weights = _fresh_weights(monkeypatch, MATS_WEIGHTS_DIR=str(tmp_path))
+    weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
     assert weights._HF_REPO_ID is None
     code = weights.fetch()
     assert code == 1
@@ -49,7 +65,7 @@ def test_fetch_without_repo_prints_manual(monkeypatch, tmp_path, capsys):
 
 
 def test_ensure_weight_returns_present_file(monkeypatch, tmp_path):
-    weights = _fresh_weights(monkeypatch, MATS_WEIGHTS_DIR=str(tmp_path))
+    weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
     real = tmp_path / "rf_detr_marker.pth"
     real.write_bytes(b"\x80\x02" + b"x" * 4096)
     assert weights.ensure_weight("rf-detr") == real
@@ -57,14 +73,29 @@ def test_ensure_weight_returns_present_file(monkeypatch, tmp_path):
 
 def test_ensure_weight_honors_no_auto_fetch(monkeypatch, tmp_path):
     weights = _fresh_weights(
-        monkeypatch, MATS_WEIGHTS_DIR=str(tmp_path), MATS_NO_AUTO_FETCH="1"
+        monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path), MATS_NO_AUTO_FETCH="1"
     )
     with pytest.raises(FileNotFoundError, match="auto-fetch is disabled"):
         weights.ensure_weight("birefnet")
 
 
 def test_ensure_weight_lfs_stub_message(monkeypatch, tmp_path):
-    weights = _fresh_weights(monkeypatch, MATS_WEIGHTS_DIR=str(tmp_path))
+    weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
     (tmp_path / "birefnet_leaf.pth").write_bytes(LFS_POINTER)
     with pytest.raises(FileNotFoundError, match="git lfs"):
         weights.ensure_weight("birefnet")
+
+
+def test_doctor_ok_when_only_rf_detr_present(monkeypatch, tmp_path, capsys):
+    weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
+    (tmp_path / "rf_detr_marker.pth").write_bytes(b"\x80\x02" + b"x" * 4096)
+    assert weights.doctor() == 0
+    out = capsys.readouterr().out
+    assert "MISSING" not in out
+    assert "not fetched (optional" in out
+
+
+def test_doctor_fails_when_rf_detr_missing(monkeypatch, tmp_path, capsys):
+    weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
+    assert weights.doctor() == 1
+    assert "MISSING" in capsys.readouterr().out

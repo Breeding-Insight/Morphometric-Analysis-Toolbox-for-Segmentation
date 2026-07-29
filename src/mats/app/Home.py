@@ -152,12 +152,13 @@ def main():
         )
 
     st.title("Morphometric Analysis Tools (MATs)")
-    st.caption("RF-DETR marker detection with BiRefNet or Otsu threshold segmentation.")
+    st.caption("RF-DETR marker detection with Otsu threshold or BiRefNet segmentation.")
 
     with st.expander("Usage and setup"):
         st.markdown(
             "- **Launch**: `mats app` (from an environment where MATs is installed).\n"
-            "- **Checkpoints**: fetched once with `mats fetch-weights` into "
+            "- **Checkpoints**: `mats fetch-weights` fetches RF-DETR (mandatory) by default; "
+            "add `--only birefnet` or `--all` to also fetch BiRefNet. Files land in "
             "`~/.cache/mats/weights`; override the location with `MATS_WEIGHTS_DIR`, "
             "or point `RF_DETR_MARKER_CHECKPOINT` / `BIREFNET_CHECKPOINT` at specific files. "
             "Run `mats doctor` to check they resolve.\n"
@@ -213,9 +214,9 @@ def main():
         )
         segmentation_label = st.selectbox(
             "Segmentation method",
-            ["BiRefNet", "Classic thresholding (Otsu)"],
+            ["Classic thresholding (Otsu)", "BiRefNet"],
         )
-        mask_method = "birefnet" if segmentation_label == "BiRefNet" else "threshold"
+        mask_method = "threshold" if segmentation_label == "Classic thresholding (Otsu)" else "birefnet"
 
         threshold_level = "auto"
         if mask_method == "threshold":

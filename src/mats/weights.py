@@ -219,12 +219,22 @@ def doctor():
     print(f"huggingface_hub:    {'ok' if _hf_available() else 'NOT installed'}")
     print(f"auto-fetch:         {'disabled (MATS_NO_AUTO_FETCH set)' if os.environ.get(_AUTO_FETCH_DISABLED) else 'enabled'}")
 
+    # RF-DETR is mandatory for every run; BiRefNet is optional (only needed for
+    # --mask-method birefnet), so its absence isn't a failure -- just report it.
     all_present = True
-    for label, path in (("RF-DETR checkpoint", RF_DETR_MARKER_CHECKPOINT),
-                        ("BiRefNet checkpoint", BIREFNET_CHECKPOINT)):
+    for label, path, required in (
+        ("RF-DETR checkpoint", RF_DETR_MARKER_CHECKPOINT, True),
+        ("BiRefNet checkpoint", BIREFNET_CHECKPOINT, False),
+    ):
         present = _is_present(path)
-        all_present = all_present and present
-        mark = "ok" if present else "MISSING"
+        if required and not present:
+            all_present = False
+        if present:
+            mark = "ok"
+        elif required:
+            mark = "MISSING"
+        else:
+            mark = "not fetched (optional -- only needed for --mask-method birefnet)"
         print(f"{label:<20} [{mark}] {path}")
         print(f"{'':<20}  source: {_source_of(path)}")
 
@@ -256,5 +266,5 @@ def doctor():
     print(f"QR decoding:        {', '.join(backends) or 'NONE (opencv-python missing)'}{suffix}")
 
     if not all_present:
-        print("\nSome weights are missing. Run:  mats fetch-weights")
+        print("\nA required weight is missing. Run:  mats fetch-weights")
     return 0 if all_present else 1

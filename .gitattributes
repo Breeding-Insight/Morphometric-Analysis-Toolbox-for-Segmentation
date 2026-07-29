@@ -1,10 +1,14 @@
-# Optional Git LFS support for model weights.
+# Git LFS support for model weights (see docs/weights.md).
 #
-# MATs does NOT commit the checkpoints to this public repo by default -- they are
-# hosted on Hugging Face and fetched with `mats fetch-weights` (see docs/weights.md).
-# Committing the 2.65 GB BiRefNet checkpoint here would force every `git clone` to
-# download it and would spend the repo's LFS bandwidth quota.
+# weights/rf_detr_marker.pth (~134 MB) IS committed via Git LFS -- it's
+# mandatory for both segmentation paths, and Hugging Face auto-fetch isn't
+# configured yet (_HF_REPO_ID in src/mats/weights.py), so committing it is the
+# only working out-of-the-box path today. Once the HF repo is live, this can
+# move to auto-fetch-only.
 #
-# This rule only takes effect if you deliberately place weights under weights/ and
-# commit them (e.g. in a private mirror). It is inert otherwise.
+# weights/birefnet_leaf.pth (~2.65 GB) is NOT committed -- it's optional, and
+# committing it would force every `git clone` to download 2.65 GB and spend
+# the repo's LFS bandwidth quota. Fetch it explicitly with
+# `mats fetch-weights --only birefnet` (or `--all`) when you need
+# --mask-method birefnet.
 weights/*.pth filter=lfs diff=lfs merge=lfs -text

@@ -1,7 +1,10 @@
 # Model weights
 
-MATs uses two fine-tuned checkpoints. They are too large to ship in the repo, so
-they are hosted separately and resolved at runtime.
+MATs uses two fine-tuned checkpoints. RF-DETR (~134 MB) is committed to this
+repo via Git LFS as an interim delivery mechanism, since it's mandatory for
+every run and Hugging Face auto-fetch isn't configured yet. BiRefNet
+(~2.65 GB) is too large to ship and is optional — it's fetched separately,
+only when you actually use `--mask-method birefnet`.
 
 | Model | File | Size | sha256 |
 |---|---|---|---|
@@ -19,9 +22,9 @@ option available to them:
 
 | You are… | Use | What happens |
 |---|---|---|
-| A general user who cloned the repo | **Auto-fetch (Hugging Face)** | Weights download **once** to `~/.cache/mats/weights` on first run, then cache |
+| A general user who cloned the repo | **Git LFS (RF-DETR) + auto-fetch (BiRefNet)** | RF-DETR is already in the checkout; BiRefNet downloads **once** to `~/.cache/mats/weights` on first `--mask-method birefnet` use, then caches |
 | A USDA / SCINet collaborator | **Shared filesystem** | Point `MATS_WEIGHTS_DIR` at a `/project` copy — read in place, **no download** |
-| A user who wants weights in the checkout | **Git LFS** | Place them in `weights/` (optional, off by default) |
+| A user who wants BiRefNet in the checkout too | **Git LFS** | Place it in `weights/` yourself and commit (optional, off by default) |
 
 ## Resolution order
 
@@ -42,9 +45,10 @@ The first inference on a fresh machine downloads the weights automatically. You
 can also do it up front:
 
 ```bash
-mats fetch-weights                 # both checkpoints
-mats fetch-weights --only rf-detr  # just one
-mats fetch-weights --force         # re-download
+mats fetch-weights                 # RF-DETR only (default; the mandatory one)
+mats fetch-weights --only birefnet # just BiRefNet
+mats fetch-weights --all           # both checkpoints
+mats fetch-weights --force         # re-download even if present
 mats doctor                        # show resolved paths + source
 ```
 
@@ -68,13 +72,17 @@ directly — no per-user copy. For external collaborators without SCINet account
 a **Globus guest collection** on that directory lets them pull the files (they
 need a free Globus login).
 
-## Git LFS (optional)
+## Git LFS
 
-The repo ships a `.gitattributes` rule for `weights/*.pth`, but does **not**
-commit the checkpoints — that would force every `git clone` to download 2.65 GB
-and spend the repo's LFS bandwidth quota. If you maintain a private mirror and
-want the weights in the checkout, place them under `weights/` and commit; a
-`git lfs pull` in a fresh clone then populates them and MATs resolves from there.
+`weights/rf_detr_marker.pth` is committed to this repo via Git LFS, so a plain
+`git clone` (with Git LFS installed) gets it automatically — an interim
+delivery mechanism until Hugging Face hosting (`_HF_REPO_ID`) is configured.
+
+`weights/birefnet_leaf.pth` is **not** committed: it's optional, and
+committing it would force every `git clone` to download 2.65 GB and spend the
+repo's LFS bandwidth quota. If you maintain a private mirror and want it in
+the checkout anyway, place it under `weights/` and commit it — the
+`.gitattributes` rule covers any `weights/*.pth` file, not just RF-DETR.
 
 ## Manual / air-gapped
 

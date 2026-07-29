@@ -2,6 +2,7 @@
 # pyright: reportMissingImports=false
 # Standard library imports
 import os
+import re
 import multiprocessing as mp
 import csv
 from itertools import combinations
@@ -781,7 +782,7 @@ def leaf_morpho(
     leaf_model_version=None,
     physical_dimensions=None,
     output_mode="masks",
-    mask_method="birefnet",
+    mask_method="threshold",
     threshold_value=THRESHOLD_LEVELS["medium"],
     scale_axis="average",
     save_measurement_axes=True,
@@ -1068,7 +1069,7 @@ def run_leaf_morpho_batch(
     results_path,
     template_dimensions=None,
     output_mode="masks",
-    mask_method="birefnet",
+    mask_method="threshold",
     threshold_value=None,
     scale_axis="average",
     workers=None,

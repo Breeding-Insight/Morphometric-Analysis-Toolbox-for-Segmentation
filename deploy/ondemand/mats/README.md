@@ -16,7 +16,8 @@ compute node and exposes it through the Open OnDemand reverse proxy.
 2. **The model checkpoints.** Fetch them once, ideally to a shared location:
    ```bash
    export MATS_WEIGHTS_DIR=/shared/models/mats
-   mats fetch-weights
+   mats fetch-weights --all   # RF-DETR + BiRefNet (the GUI defaults to Otsu, but a
+                              # GPU-backed OOD app is the typical BiRefNet use case)
    mats doctor            # confirm they resolve
    ```
    Point the same `MATS_WEIGHTS_DIR` at that path in `template/script.sh.erb`.

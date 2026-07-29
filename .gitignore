@@ -1,9 +1,15 @@
-# Model weights (fetched with `mats fetch-weights`, not committed)
+# Model weights (see docs/weights.md). RF-DETR (weights/rf_detr_marker.pth) is
+# the one intentional exception: it's committed via Git LFS as an interim
+# delivery mechanism (mandatory for both segmentation paths, and Hugging Face
+# auto-fetch isn't wired up yet). BiRefNet is not committed -- too large.
+# `weights/*` + a negation, not a bare `weights/`, because gitignore can't
+# re-include a file whose parent directory is itself excluded.
 *.pth
 *.pt
 *.pkl
 *.onnx
-weights/
+weights/*
+!weights/rf_detr_marker.pth
 
 # Pipeline run outputs
 mats_outputs/

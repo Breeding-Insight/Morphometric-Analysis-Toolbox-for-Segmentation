@@ -53,9 +53,11 @@ def build_parser():
                      help='Physical template size as <width>x<height><unit>, e.g. 10.5x9.5in or 27x24cm.')
     run.add_argument('--output-mode', choices=('masks', 'target-boxes'), default='masks',
                      help='Produce segmentation masks, or only perspective-corrected target boxes.')
-    run.add_argument('--mask-method', choices=('birefnet', 'threshold'), default='birefnet',
-                     help='Mask method when --output-mode masks. birefnet is accurate but heavy; '
-                          'threshold is fast for clean backgrounds.')
+    run.add_argument('--mask-method', choices=('threshold', 'birefnet'), default='threshold',
+                     help='Mask method when --output-mode masks. threshold (Otsu) is fast, needs '
+                          'no GPU and no extra download; birefnet is more accurate on cluttered '
+                          'backgrounds but needs the ~2.65 GB checkpoint '
+                          '(fetch with `mats fetch-weights --only birefnet`).')
     run.add_argument('--threshold-level', choices=('auto', 'low', 'medium', 'high'), default='auto',
                      help="For --mask-method threshold: auto uses Otsu (recommended); "
                           "low=100, medium=125, high=150.")
@@ -72,8 +74,11 @@ def build_parser():
                      help='Arguments forwarded verbatim to `streamlit run` (e.g. --server.port 8502).')
 
     fetch = sub.add_parser('fetch-weights', help='Download the model checkpoints.')
-    fetch.add_argument('--only', choices=('rf-detr', 'birefnet'), default=None,
-                       help='Fetch only one checkpoint (default: both).')
+    fetch_target = fetch.add_mutually_exclusive_group()
+    fetch_target.add_argument('--only', choices=('rf-detr', 'birefnet'), default=None,
+                       help='Fetch only one checkpoint (default when no flag is given: rf-detr).')
+    fetch_target.add_argument('--all', action='store_true',
+                       help='Fetch both checkpoints (RF-DETR + the ~2.65 GB BiRefNet).')
     fetch.add_argument('--force', action='store_true', help='Re-download even if the file already exists.')
 
     sub.add_parser('doctor', help='Report weights, devices and QR decoders.')
@@ -224,9 +229,20 @@ def _cmd_app(args):
     return launch(args.extra or [])
 
 
+def _resolve_fetch_only(args):
+    """Translate --only/--all into the target passed to weights.fetch(only=...).
+
+    Bare `mats fetch-weights` fetches RF-DETR only (mandatory, small); BiRefNet
+    (optional, ~2.65 GB) needs an explicit `--only birefnet` or `--all`.
+    """
+    if args.only:
+        return args.only
+    return None if args.all else "rf-detr"
+
+
 def _cmd_fetch_weights(args):
     from . import weights
-    return weights.fetch(only=args.only, force=args.force)
+    return weights.fetch(only=_resolve_fetch_only(args), force=args.force)
 
 
 def _cmd_doctor(_args):

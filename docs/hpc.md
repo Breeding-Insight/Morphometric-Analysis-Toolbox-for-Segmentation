@@ -12,7 +12,7 @@ conda env create -f environment.yml
 conda activate mats
 pip install -e ".[app]"
 export MATS_WEIGHTS_DIR=/project/<your_project>/mats_weights   # shared, readable
-mats fetch-weights            # populate it once, from a data-transfer node
+mats fetch-weights --all      # populate both checkpoints once, from a data-transfer node
 mats doctor
 ```
 

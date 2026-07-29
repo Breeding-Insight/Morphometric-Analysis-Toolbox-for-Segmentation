@@ -2,8 +2,9 @@
 
 Measure leaf **area, length, and width** in real-world units from a photo of
 leaves laid on a printed calibration template. MATS finds four fiducial markers
-with RF-DETR, corrects perspective, segments each leaf with BiRefNet (or a fast
-Otsu threshold), and writes a measurements CSV.
+with RF-DETR, corrects perspective, segments each leaf with a fast Otsu
+threshold by default (or the heavier BiRefNet model for tougher backgrounds),
+and writes a measurements CSV.
 
 Pipeline in one line: **detect markers → perspective-correct → segment leaf →
 measure → CSV**.
@@ -46,7 +47,8 @@ a requirement.
 Then fetch the model weights once and confirm the environment:
 
 ```bash
-mats fetch-weights      # downloads ~2.6 GB to ~/.cache/MATS/weights
+mats fetch-weights      # fetches the ~134 MB RF-DETR checkpoint (mandatory, default)
+mats fetch-weights --all # also fetches the ~2.65 GB BiRefNet checkpoint
 mats doctor             # checks weights, GPU/CPU device, QR backends
 ```
 
@@ -72,7 +74,7 @@ This opens the Streamlit GUI in your browser. From there:
 1. **Pick images** — a local folder, or drag-and-drop uploads.
 2. **Set the scale** — type the observation-box size (e.g. `10.5x9.5in`) or
    leave it blank to read it from the template's QR code automatically.
-3. **Choose segmentation** — BiRefNet (accurate) or Otsu threshold (fast).
+3. **Choose segmentation** — Otsu threshold (fast, default) or BiRefNet (accurate).
 4. **Run**, then preview results and download a CSV or a ZIP of masks + boxes.
 
 **Printing templates.** The app has a **Template Creator** page (in the sidebar)
@@ -97,15 +99,18 @@ Common options (full reference in [docs/cli.md](docs/cli.md)):
 | `-o, --output_dir` | Where masks / target boxes are written | prompt |
 | `-r, --results_path` | Measurement CSV path | `./leaf_morpho_results.csv` |
 | `-t, --template_dimensions` | Box size, `<w>x<h><unit>` (else read from QR) | QR fallback |
-| `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast) | `birefnet` |
+| `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast) | `threshold` |
 | `--threshold-level` | `auto` (Otsu) / `low` / `medium` / `high` | `auto` |
 | `--csv-schema` | `full` (all scale conventions) or `compact` | `full` |
 | `-w, --workers` | Parallel workers (threshold path only) | auto |
 | `--save-axes` | Also save length/width overlay images for QC | off |
 
-**Choosing a segmentation method.** `birefnet` is the accurate default and uses
-a GPU when available (CPU works but is slow, and not suggested). `threshold` is much faster and
-good for clean, high-contrast backgrounds where a leaf sits on plain white.
+**Choosing a segmentation method.** `threshold` (Otsu) is the default — fast,
+no GPU, no extra download, and good for clean, high-contrast backgrounds where
+a leaf sits on plain white. `birefnet` is more accurate on cluttered or
+low-contrast backgrounds and uses a GPU when available (CPU works but is
+slow), at the cost of the ~2.65 GB checkpoint — fetch it once with
+`mats fetch-weights --only birefnet`.
 
 ---
 
@@ -137,14 +142,18 @@ resolved at runtime:
 | RF-DETR marker detector | `rf_detr_marker.pth` | ~134 MB |
 | BiRefNet leaf segmenter | `birefnet_leaf.pth` | ~2.65 GB |
 
-You don't have to fetch them manually — the **first run downloads them once** to
-`~/.cache/MATS/weights` and caches them. `MATS fetch-weights` just does it up
-front. Three delivery options, picked automatically:
+RF-DETR is committed to this repo via Git LFS, so a plain `git clone` gets it
+automatically — an interim delivery mechanism until Hugging Face hosting is
+configured. BiRefNet is **not** committed (that would force every clone to
+download 2.65 GB); it's fetched separately, only when you actually use it:
 
-- **Auto-fetch (default)** — downloads from Hugging Face on first use.
+- **Auto-fetch (default)** — `mats fetch-weights` downloads the mandatory
+  RF-DETR checkpoint; BiRefNet is fetched only on request (first use of
+  `--mask-method birefnet`, or `mats fetch-weights --only birefnet` / `--all`).
 - **Shared filesystem** — set `MATS_WEIGHTS_DIR` (e.g. a SCINet `/project` path)
   to read weights in place with no per-user copy.
-- **Git LFS** — optionally keep them in `weights/` in your checkout.
+- **Git LFS** — RF-DETR is committed to this repo (interim, until Hugging Face
+  hosting is live); BiRefNet is intentionally not committed.
 
 Set `MATS_NO_AUTO_FETCH=1` to disable the automatic download (e.g. on an HPC login
 node). Full detail, DOI, and checksums: [docs/weights.md](docs/weights.md).
@@ -154,7 +163,7 @@ node). Full detail, DOI, and checksums: [docs/weights.md](docs/weights.md).
 ## On a cluster (HPC / Open OnDemand)
 
 An Open OnDemand Batch Connect app that serves the GUI on a compute node is in
-[deploy/ondemand/MATS/](deploy/ondemand/MATS/). See its README and
+[deploy/ondemand/mats/](deploy/ondemand/mats/). See its README and
 [docs/hpc.md](docs/hpc.md).
 
 ---
@@ -180,13 +189,13 @@ Run `MATS doctor` first — it reports most of these.
   `-t 10.5x9.5in`), or add enhanced QR reading: `pip install -e ".[qr]"` plus the
   `zbar` system lib (Linux: `apt install libzbar0`; macOS: `brew install zbar`;
   conda: `conda install -c conda-forge zbar`).
-- **CUDA out of memory** — use `--mask-method threshold`, or process in smaller
-  batches.
+- **CUDA out of memory** (only relevant with `--mask-method birefnet`) — process
+  in smaller batches, or use `--mask-method threshold` (the default).
 - **No markers detected** — check print quality and that the marker color
   matches the template (the Template Creator uses the trained color); make sure
   all four corners are in frame.
 - **Blank page on Open OnDemand** — almost always the reverse-proxy
-  `baseUrlPath` mismatch; see [deploy/ondemand/MATS/README.md](deploy/ondemand/MATS/README.md).
+  `baseUrlPath` mismatch; see [deploy/ondemand/mats/README.md](deploy/ondemand/mats/README.md).
 
 ---
 

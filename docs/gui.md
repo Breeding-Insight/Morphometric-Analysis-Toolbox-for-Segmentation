@@ -18,8 +18,9 @@ pages, chosen from the sidebar: **Home** (measuring) and **Template Creator**
    `~/mats_outputs`).
 3. **Template dimensions.** Enter the observation-box size, e.g. `10.5x9.5in` or
    `27x24cm`. Leave blank to read it from the template's QR code.
-4. **Segmentation method.** *BiRefNet* (accurate; uses a GPU when available) or
-   *Classic thresholding (Otsu)* (fast; best on clean backgrounds).
+4. **Segmentation method.** *Classic thresholding (Otsu)* (fast, default; best
+   on clean backgrounds) or *BiRefNet* (more accurate on cluttered backgrounds;
+   uses a GPU when available; needs the ~2.65 GB checkpoint).
 5. **Output options.** Pick the **Full research schema** CSV to match the
    analysis scripts, or **Compact** for a trimmed export. Optionally write a
    failures log.
@@ -33,8 +34,10 @@ the browser tab open until they finish.
 
 ## Preflight failures
 
-- **RF-DETR / BiRefNet checkpoint (red)** — run `mats fetch-weights`, or set
+- **RF-DETR checkpoint (red)** — run `mats fetch-weights`, or set
   `MATS_WEIGHTS_DIR`. See [weights.md](weights.md).
+- **BiRefNet checkpoint (red, only checked when BiRefNet segmentation is
+  selected)** — run `mats fetch-weights --only birefnet` (or `--all`).
 - **Template dimensions (red)** — the text must look like `10.5x9.5in` or
   `27x24cm`.
 - **Input images (red)** — the folder has no supported image files.

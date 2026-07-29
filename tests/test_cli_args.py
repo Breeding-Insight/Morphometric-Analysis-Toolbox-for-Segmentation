@@ -2,7 +2,7 @@
 
 import pytest
 
-from mats.cli import build_parser, _normalize_argv
+from mats.cli import build_parser, _normalize_argv, _resolve_fetch_only
 
 
 def test_default_subcommand_inserted():
@@ -22,7 +22,7 @@ def test_run_defaults():
     assert ns.input_dir == "in"
     assert ns.output_dir == "out"
     assert ns.output_mode == "masks"
-    assert ns.mask_method == "birefnet"
+    assert ns.mask_method == "threshold"
     assert ns.threshold_level == "auto"
     assert ns.csv_schema == "full"        # research schema by default
     assert ns.save_axes is False
@@ -45,3 +45,23 @@ def test_compact_and_axes_opt_in():
 def test_invalid_choice_rejected():
     with pytest.raises(SystemExit):
         build_parser().parse_args(["run", "-i", "x", "--mask-method", "nonsense"])
+
+
+def test_fetch_weights_default_targets_rf_detr_only():
+    ns = build_parser().parse_args(["fetch-weights"])
+    assert _resolve_fetch_only(ns) == "rf-detr"
+
+
+def test_fetch_weights_all_flag_targets_both():
+    ns = build_parser().parse_args(["fetch-weights", "--all"])
+    assert _resolve_fetch_only(ns) is None
+
+
+def test_fetch_weights_explicit_only_wins():
+    ns = build_parser().parse_args(["fetch-weights", "--only", "birefnet"])
+    assert _resolve_fetch_only(ns) == "birefnet"
+
+
+def test_fetch_weights_all_and_only_conflict_rejected():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["fetch-weights", "--all", "--only", "birefnet"])

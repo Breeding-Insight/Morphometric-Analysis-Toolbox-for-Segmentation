@@ -21,6 +21,20 @@ All notable changes to MATs are documented here. This project adheres to
 - The Template Creator imports the dimension parser from `mats.dimensions`
   instead of duplicating the regex.
 - Open OnDemand launcher uses `mats app` (no repo-path assumption).
+- `--mask-method` / `mask_method` / the GUI segmentation selector now default to
+  `threshold` (Otsu) instead of `birefnet`, so a default run needs no GPU and
+  no extra checkpoint download. `mats fetch-weights` now fetches RF-DETR only
+  by default; `--all` or `--only birefnet` fetches the BiRefNet checkpoint.
+- `mats doctor` no longer treats a missing BiRefNet checkpoint as an error
+  (exit 1); it's reported as optional, since it's only needed for
+  `--mask-method birefnet`.
+
+### Fixed
+- `weights/birefnet_leaf.pth` is no longer committed to the repository, so a
+  plain `git clone` no longer downloads the 2.65 GB checkpoint.
+  `weights/rf_detr_marker.pth` (~134 MB) stays committed via Git LFS, since
+  it's mandatory for every run and Hugging Face auto-fetch isn't configured
+  yet.
 
 ### Notes
 - First public extraction of the pipeline from the manuscript repository.

@@ -26,7 +26,7 @@ mats run -i ./images -o ./out -r results.csv -t 10.5x9.5in
 | `-r, --results_path, --results-path` | Measurement CSV path. | `./leaf_morpho_results.csv` |
 | `-t, --template_dimensions, --template-dimensions` | Observation-box size as `<w>x<h><unit>`, e.g. `10.5x9.5in` or `27x24cm`. | read from the template QR |
 | `--output-mode` | `masks` (segment leaves) or `target-boxes` (only save corrected boxes). | `masks` |
-| `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast). | `birefnet` |
+| `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast). | `threshold` |
 | `--threshold-level` | For `threshold`: `auto` (Otsu), `low` (100), `medium` (125), `high` (150). | `auto` |
 | `--csv-schema` | `full` (all three scale conventions) or `compact`. | `full` |
 | `-w, --workers` | Parallel workers. Only the CPU `threshold` path over pre-made target boxes parallelizes; model-backed runs use one worker. | auto |
@@ -50,8 +50,9 @@ threshold`.
 ## `mats fetch-weights`
 
 ```bash
-mats fetch-weights                 # both checkpoints
-mats fetch-weights --only rf-detr  # just one
+mats fetch-weights                 # RF-DETR only (default)
+mats fetch-weights --all           # both checkpoints
+mats fetch-weights --only birefnet # just BiRefNet
 mats fetch-weights --force         # re-download even if present
 ```
 
