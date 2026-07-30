@@ -107,7 +107,7 @@ Common options (full reference in [docs/cli.md](docs/cli.md)):
 | `-t, --template_dimensions` | Box size, `<w>x<h><unit>` (else read from QR) | QR fallback |
 | `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast) | `threshold` |
 | `--threshold-level` | `auto` (Otsu) / `low` / `medium` / `high` | `auto` |
-| `--csv-schema` | `full` (all scale conventions) or `compact` | `full` |
+| `--csv-schema` | `full` (area/width/length + per-axis px-per-cm) or `compact` | `full` |
 | `-w, --workers` | Parallel workers (threshold path only) | auto |
 | `--save-axes` | Also save length/width overlay images for QC | off |
 
@@ -129,12 +129,24 @@ Per image, in the output folder:
 
 Plus a measurements CSV. Two schemas:
 
-- **full** (default, research schema) — leaf area, width, and length under three
-  scale calibrations (mean, width-based, height-based) with the pixels-per-cm
-  factors. This matches the columns the analysis scripts expect.
-- **compact** — `sample_id, area_cm2, height_cm, length_cm`.
+- **full** (default, research schema) — `sample_id, leaf_area_cm2, width_cm,
+  length_cm, px_per_cm_width, px_per_cm_height, scale_aspect_ratio, source`.
+  Scaling is **anisotropic**: the x-extent (`width_cm`) is divided by
+  `px_per_cm_width`, the y-extent (`length_cm`) by `px_per_cm_height`, and area
+  by their product — each axis calibrated independently against the template,
+  rather than one averaged scalar applied to everything. `scale_aspect_ratio`
+  (`px_per_cm_width / px_per_cm_height`) is a QC signal: it should sit near 1.0,
+  and a value far from 1.0 flags a calibration problem (skewed template print,
+  lens distortion, a non-planar sheet) worth investigating.
+- **compact** — `sample_id, area_cm2, width_cm, length_cm`.
 
 A `leaf_morpho_failures.csv` records per-image warnings and failures.
+
+> **Migration note:** earlier versions reported three isotropic scale
+> conventions (`*_meanscale`, `*_widthscale`, `*_heightscale`). Old CSVs remain
+> usable — the new `leaf_area_cm2` can be recovered from an old row with
+> `leaf_area_cm2_widthscale * (px_per_cm_width / px_per_cm_height)`, and the new
+> `width_cm`/`length_cm` equal the old `width_cm_widthscale`/`length_cm_heightscale`.
 
 ---
 
@@ -178,11 +190,14 @@ An Open OnDemand Batch Connect app that serves the GUI on a compute node is in
 
 MATS chains two models. **RF-DETR** (fine-tuned, single "Marker" class) detects
 the four corner fiducials at 1120×1120 px; their centroids define a homography
-that rectifies the observation box and fixes the pixels-per-cm scale.
-**BiRefNet** (fine-tuned for leaf foreground) then segments the leaf, from which
-area (pixel count) and length/width (bounding dimensions) are computed and
-converted to centimeters. A classic Otsu threshold is offered as a fast
-alternative to BiRefNet. See the manuscript for training and evaluation detail.
+that rectifies the observation box. The rectified box's pixel width and height
+are compared against the template's known physical size, independently per
+axis, to fix `px_per_cm_width` and `px_per_cm_height`. **BiRefNet** (fine-tuned
+for leaf foreground) then segments the leaf, from which area (pixel count) and
+length/width (bounding dimensions) are computed and converted to centimeters
+using their respective axis scale. A classic Otsu threshold is offered as a
+fast alternative to BiRefNet. See the manuscript for training and evaluation
+detail.
 
 ---
 

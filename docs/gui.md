@@ -25,9 +25,9 @@ hardware diagnostics).
 4. **Segmentation method.** *Classic thresholding (Otsu)* (fast, default; best
    on clean backgrounds) or *BiRefNet* (more accurate on cluttered backgrounds;
    uses a GPU when available; needs the ~2.65 GB checkpoint).
-5. **Output options.** Pick the **Full research schema** CSV to match the
-   analysis scripts, or **Compact** for a trimmed export. Optionally write a
-   failures log.
+5. **Output options.** Pick the **Full research schema** CSV for area/width/length
+   plus per-axis `px_per_cm_width`/`px_per_cm_height` and a `scale_aspect_ratio`
+   QC column, or **Compact** for a trimmed export. Optionally write a failures log.
 6. **Workers.** The app detects the CPU workers assigned to it (including HPC
    scheduler limits). One worker uses CUDA/MPS when available. Selecting two or
    more workers enables parallel CPU processing and disables CUDA/MPS for that

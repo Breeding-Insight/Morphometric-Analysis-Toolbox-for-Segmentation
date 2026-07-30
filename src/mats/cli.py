@@ -61,11 +61,9 @@ def build_parser():
     run.add_argument('--threshold-level', choices=('auto', 'low', 'medium', 'high'), default='auto',
                      help="For --mask-method threshold: auto uses Otsu (recommended); "
                           "low=100, medium=125, high=150.")
-    run.add_argument('--scale-axis', choices=('average', 'width', 'height'), default='average',
-                     help='Deprecated; the CSV always reports mean, width-based and height-based conversions.')
     run.add_argument('--csv-schema', choices=('full', 'compact'), default='full',
-                     help='full = all three scale conventions (research schema); '
-                          'compact = sample_id, area_cm2, height_cm, length_cm.')
+                     help='full = area/width/length plus per-axis pixels-per-cm and scale_aspect_ratio '
+                          '(research schema); compact = sample_id, area_cm2, width_cm, length_cm.')
     run.add_argument('--save-axes', action='store_true',
                      help='Also save per-image length/width measurement-axis overlays for QC.')
 
@@ -106,7 +104,7 @@ def _normalize_argv(argv):
 
 def _print_run_banner(args, threshold_value):
     print(f"\nOutput mode: {args.output_mode}")
-    print("Scale columns: mean, width-based, height-based")
+    print("Scale: independent per-axis pixels-per-cm (anisotropic)")
     if args.output_mode == "masks":
         print(f"Mask method: {args.mask_method}")
         if args.mask_method == "threshold":
@@ -211,7 +209,6 @@ def _cmd_run(args):
         output_mode=args.output_mode,
         mask_method=args.mask_method,
         threshold_value=threshold_value,
-        scale_axis=args.scale_axis,
         workers=args.workers,
         write_failures=True,
         compact_csv=(args.csv_schema == "compact"),
