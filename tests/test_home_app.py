@@ -81,6 +81,8 @@ def test_home_page_defaults_to_manual_dimensions():
     assert not height_input.disabled
     dimensions_bar = [i for i in app.text_input if i.label == "Template dimensions"][0]
     assert dimensions_bar.value == "12x12in"
+    assert not dimensions_bar.disabled
+    assert 'e.g. "10.5x9.5in" or' in dimensions_bar.help
 
 
 def test_qr_mode_disables_manual_dimension_inputs():
@@ -91,14 +93,56 @@ def test_qr_mode_disables_manual_dimension_inputs():
     assert not app.exception
     assert all(item.disabled for item in app.number_input)
     dimensions_bar = [i for i in app.text_input if i.label == "Template dimensions"][0]
+    assert dimensions_bar.disabled
     assert dimensions_bar.value == "Variable dimensions — QR-derived"
 
 
-def test_unit_conversion_preserves_size_without_snapping():
+def test_unchecking_qr_mode_restores_the_cached_manual_entry():
+    app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
+    dimensions_bar = lambda: [i for i in app.text_input if i.label == "Template dimensions"][0]
+
+    app.number_input(key="measure_width").set_value(20.0).run(timeout=30)
+    app.checkbox(key="measure_use_qr").check().run(timeout=30)
+    assert dimensions_bar().value == "Variable dimensions — QR-derived"
+
+    app.checkbox(key="measure_use_qr").uncheck().run(timeout=30)
+    assert dimensions_bar().value == "20x12in"
+
+
+def test_unit_conversion_snaps_selectors_to_nearest_half():
     app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
 
     app.segmented_control(key="measure_unit").set_value("cm").run(timeout=30)
 
     width_input, height_input = app.number_input
-    assert width_input.value == pytest.approx(30.48)
-    assert height_input.value == pytest.approx(30.48)
+    assert width_input.value == pytest.approx(30.5)
+    assert height_input.value == pytest.approx(30.5)
+    dimensions_bar = [i for i in app.text_input if i.label == "Template dimensions"][0]
+    assert dimensions_bar.value == "30.5x30.5cm"
+
+
+def test_typing_a_custom_size_in_the_bar_does_not_resync_the_selectors():
+    app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
+
+    dimensions_bar = [i for i in app.text_input if i.label == "Template dimensions"][0]
+    dimensions_bar.set_value("8.27x11.69in").run(timeout=30)
+
+    assert not app.exception
+    width_input, height_input = app.number_input
+    assert width_input.value == 12.0
+    assert height_input.value == 12.0
+    dimensions_bar = [i for i in app.text_input if i.label == "Template dimensions"][0]
+    assert dimensions_bar.value == "8.27x11.69in"
+
+
+def test_invalid_custom_dimensions_block_the_run():
+    app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
+
+    dimensions_bar = [i for i in app.text_input if i.label == "Template dimensions"][0]
+    dimensions_bar.set_value("not-a-size").run(timeout=30)
+
+    assert not app.exception
+    assert any(
+        "Template dimensions must look like" in item.value
+        for item in app.error
+    )

@@ -28,10 +28,9 @@ mats run -i ./images -o ./out -r results.csv -t 10.5x9.5in
 | `--output-mode` | `masks` (segment leaves) or `target-boxes` (only save corrected boxes). | `masks` |
 | `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast). | `threshold` |
 | `--threshold-level` | For `threshold`: `auto` (Otsu), `low` (100), `medium` (125), `high` (150). | `auto` |
-| `--csv-schema` | `full` (all three scale conventions) or `compact`. | `full` |
+| `--csv-schema` | `full` (area/width/length + per-axis px-per-cm) or `compact`. | `full` |
 | `-w, --workers` | Parallel workers. Only the CPU `threshold` path over pre-made target boxes parallelizes; model-backed runs use one worker. | auto |
 | `--save-axes` | Also write per-image length/width overlay images for QC. | off |
-| `--scale-axis` | Deprecated; the CSV always reports mean, width- and height-based conversions. | `average` |
 
 ### Interactive vs non-interactive
 

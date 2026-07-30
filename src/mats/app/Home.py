@@ -279,7 +279,8 @@ def main():
             "Run `mats doctor` to check they resolve.\n"
             "- **Outputs**: per image `{sample_id}_target_box.jpg` and `{sample_id}_mask.png`, "
             "plus `leaf_morpho_results.csv` (and `leaf_morpho_failures.csv` when enabled). "
-            "Choose the **Full research schema** to match the downstream analysis scripts.\n"
+            "Choose the **Full research schema** for per-axis pixels-per-cm and a scale QC column "
+            "alongside area/width/length.\n"
             "- **HPC**: an Open OnDemand wrapper lives under `deploy/ondemand/`."
         )
 
@@ -451,9 +452,9 @@ def main():
         st.header("Output options")
         schema_label = st.selectbox(
             "Results CSV schema",
-            ["Full research schema (*_meanscale)", "Compact (sample_id, area, height, length)"],
+            ["Full research schema (area/width/length + px-per-cm)", "Compact (sample_id, area, width, length)"],
             help=(
-                "Full matches the columns the downstream MATS analysis scripts expect. "
+                "Full adds px_per_cm_width, px_per_cm_height, and scale_aspect_ratio for QC. "
                 "Compact is the trimmed UI export."
             ),
         )

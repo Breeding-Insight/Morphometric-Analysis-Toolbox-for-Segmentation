@@ -45,6 +45,19 @@ except Exception:  # pragma: no cover - optional dependency
 # Re-exported here to preserve the historical `core.parse_template_dimensions` API.
 from .dimensions import TEMPLATE_DIM_PATTERN, parse_template_dimensions
 
+# Scale math and results-row construction live in their own dependency-light
+# module so they can be unit-tested without importing torch/rfdetr/cv2.
+# Re-exported here to preserve the historical `core.RESULTS_FIELDNAMES` etc. API.
+from .scaling import (
+    RESULTS_FIELDNAMES,
+    COMPACT_RESULTS_FIELDNAMES,
+    NA_VALUE,
+    px_per_cm_axes,
+    measurement_na_row,
+    measurement_row,
+    compact_measurement_row,
+)
+
 # Checkpoint resolution and constants live in mats.paths; re-exported for API
 # compatibility with callers that read core.RF_DETR_MARKER_CHECKPOINT etc.
 from .paths import (
@@ -63,24 +76,6 @@ BIREFNET_THRESHOLD = 0.5
 BIREFNET_MEAN = [0.485, 0.456, 0.406]
 BIREFNET_STD = [0.229, 0.224, 0.225]
 TARGET_BOX_SUFFIX = "_target_box"
-RESULTS_FIELDNAMES = [
-    "sample_id",
-    "leaf_area_cm2_meanscale",
-    "width_cm_meanscale",
-    "length_cm_meanscale",
-    "px_per_cm_mean",
-    "leaf_area_cm2_widthscale",
-    "width_cm_widthscale",
-    "length_cm_widthscale",
-    "px_per_cm_width",
-    "leaf_area_cm2_heightscale",
-    "width_cm_heightscale",
-    "length_cm_heightscale",
-    "px_per_cm_height",
-    "source",
-]
-COMPACT_RESULTS_FIELDNAMES = ["sample_id", "area_cm2", "height_cm", "length_cm"]
-NA_VALUE = "NA"
 THRESHOLD_LEVELS = {
     "auto": None,   # Otsu's method: threshold computed per-image from histogram
     "low": 100,
@@ -563,25 +558,6 @@ def create_leaf_mask(target_box, mask_method, threshold_value, device_override=N
     return binary_mask
 
 
-def measurement_na_row(sample_id, source):
-    return {
-        "sample_id": sample_id,
-        "leaf_area_cm2_meanscale": NA_VALUE,
-        "width_cm_meanscale": NA_VALUE,
-        "length_cm_meanscale": NA_VALUE,
-        "px_per_cm_mean": NA_VALUE,
-        "leaf_area_cm2_widthscale": NA_VALUE,
-        "width_cm_widthscale": NA_VALUE,
-        "length_cm_widthscale": NA_VALUE,
-        "px_per_cm_width": NA_VALUE,
-        "leaf_area_cm2_heightscale": NA_VALUE,
-        "width_cm_heightscale": NA_VALUE,
-        "length_cm_heightscale": NA_VALUE,
-        "px_per_cm_height": NA_VALUE,
-        "source": source,
-    }
-
-
 def leaf_bounding_rect(binary_mask):
     contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
@@ -629,11 +605,12 @@ def save_measurement_axes_image(output_dir, file_name, target_box, binary_mask):
 def measurement_row_from_mask(
     sample_id,
     binary_mask,
-    px_per_cm_mean,
-    px_per_cm_width=None,
-    px_per_cm_height=None,
+    px_per_cm_width,
+    px_per_cm_height,
 ):
-    if px_per_cm_mean is None or px_per_cm_mean <= 0:
+    if px_per_cm_width is None or px_per_cm_height is None:
+        return measurement_na_row(sample_id, "SCALE: physical dimensions unavailable")
+    if px_per_cm_width <= 0 or px_per_cm_height <= 0:
         return measurement_na_row(sample_id, "SCALE: physical dimensions unavailable")
 
     white_pixels = int(np.sum(binary_mask == 255))
@@ -645,57 +622,7 @@ def measurement_row_from_mask(
         return measurement_na_row(sample_id, "LEAF_MASK: leaf contour not detected")
 
     _x, _y, w, h = rect
-
-    def _metrics_for_scale(scale):
-        if scale is None or scale <= 0:
-            return NA_VALUE, NA_VALUE, NA_VALUE, NA_VALUE
-        return (
-            white_pixels / (scale ** 2),
-            w / scale,
-            h / scale,
-            scale,
-        )
-
-    mean_area, mean_width, mean_length, mean_px = _metrics_for_scale(px_per_cm_mean)
-    width_area, width_width, width_length, width_px = _metrics_for_scale(px_per_cm_width)
-    height_area, height_width, height_length, height_px = _metrics_for_scale(px_per_cm_height)
-    row = {
-        "sample_id": sample_id,
-        "leaf_area_cm2_meanscale": mean_area,
-        "width_cm_meanscale": mean_width,
-        "length_cm_meanscale": mean_length,
-        "px_per_cm_mean": mean_px,
-        "leaf_area_cm2_widthscale": width_area,
-        "width_cm_widthscale": width_width,
-        "length_cm_widthscale": width_length,
-        "px_per_cm_width": width_px,
-        "leaf_area_cm2_heightscale": height_area,
-        "width_cm_heightscale": height_width,
-        "length_cm_heightscale": height_length,
-        "px_per_cm_height": height_px,
-        "source": 0,
-    }
-    return row
-
-
-def px_per_cm_from_target_box(target_box, template_width, template_height, unit, scale_axis="average"):
-    if target_box is None or template_width is None or template_height is None:
-        return None
-    if template_width <= 0 or template_height <= 0:
-        return None
-
-    img_height, img_width = target_box.shape[:2]
-    px_per_unit_h = img_height / template_height
-    px_per_unit_w = img_width / template_width
-    if scale_axis == "width":
-        px_per_unit = px_per_unit_w
-    elif scale_axis == "height":
-        px_per_unit = px_per_unit_h
-    else:
-        px_per_unit = (px_per_unit_h + px_per_unit_w) / 2.0
-    if unit == "cm":
-        return px_per_unit
-    return px_per_unit / 2.54
+    return measurement_row(sample_id, white_pixels, w, h, px_per_cm_width, px_per_cm_height)
 
 
 def write_results_csv(result_rows, results_path):
@@ -706,18 +633,6 @@ def write_results_csv(result_rows, results_path):
         writer = csv.DictWriter(csvfile, fieldnames=RESULTS_FIELDNAMES)
         writer.writeheader()
         writer.writerows(result_rows)
-
-
-def compact_measurement_row(row):
-    """Return only the UI-facing measurements requested for bulk export."""
-    return {
-        "sample_id": row.get("sample_id", NA_VALUE),
-        "area_cm2": row.get("leaf_area_cm2_meanscale", NA_VALUE),
-        # Existing measurement names use target-box orientation: width is x-axis,
-        # length is y-axis. The UI exports these as length and height.
-        "height_cm": row.get("length_cm_meanscale", NA_VALUE),
-        "length_cm": row.get("width_cm_meanscale", NA_VALUE),
-    }
 
 
 def write_compact_results_csv(result_rows, results_path):
@@ -814,7 +729,6 @@ def leaf_morpho(
     output_mode="masks",
     mask_method="threshold",
     threshold_value=THRESHOLD_LEVELS["medium"],
-    scale_axis="average",
     save_measurement_axes=True,
     execution_device="auto",
 ):
@@ -882,19 +796,15 @@ def leaf_morpho(
                 )
 
             width, height, unit = template_dimensions
-            px_per_cm_mean = px_per_cm_from_target_box(target_box, width, height, unit, "average")
-            px_per_cm_width = px_per_cm_from_target_box(target_box, width, height, unit, "width")
-            px_per_cm_height = px_per_cm_from_target_box(target_box, width, height, unit, "height")
-            if px_per_cm_mean is None:
+            scale_axes = px_per_cm_axes(target_box.shape[:2], width, height, unit)
+            if scale_axes is None:
                 return _ok(measurement_na_row(file_name, "SCALE: invalid template dimensions"))
 
             return _ok(
                 measurement_row_from_mask(
                     file_name,
                     binary_mask,
-                    px_per_cm_mean,
-                    px_per_cm_width,
-                    px_per_cm_height,
+                    *scale_axes,
                 ),
                 warnings,
             )
@@ -1054,10 +964,8 @@ def leaf_morpho(
             if save_measurement_axes:
                 save_measurement_axes_image(output_dir, file_name, target_box, binary_mask)
 
-        px_per_cm_mean = px_per_cm_from_target_box(target_box, width, height, unit, "average")
-        px_per_cm_width = px_per_cm_from_target_box(target_box, width, height, unit, "width")
-        px_per_cm_height = px_per_cm_from_target_box(target_box, width, height, unit, "height")
-        if px_per_cm_mean is None:
+        scale_axes = px_per_cm_axes(target_box.shape[:2], width, height, unit)
+        if scale_axes is None:
             result_row = measurement_na_row(
                 file_name,
                 scale_failure or "SCALE: physical dimensions unavailable",
@@ -1066,9 +974,7 @@ def leaf_morpho(
             result_row = measurement_row_from_mask(
                 file_name,
                 binary_mask,
-                px_per_cm_mean,
-                px_per_cm_width,
-                px_per_cm_height,
+                *scale_axes,
             )
 
         return _ok(result_row, warnings)
@@ -1085,7 +991,6 @@ def _process_batch_image(
     output_mode,
     mask_method,
     threshold_value,
-    scale_axis,
     save_measurement_axes,
     execution_device,
 ):
@@ -1098,7 +1003,6 @@ def _process_batch_image(
         output_mode,
         mask_method,
         threshold_value,
-        scale_axis,
         save_measurement_axes,
         execution_device,
     )
@@ -1113,7 +1017,6 @@ def run_leaf_morpho_batch(
     output_mode="masks",
     mask_method="threshold",
     threshold_value=None,
-    scale_axis="average",
     workers=None,
     progress_callback=None,
     write_failures=False,
@@ -1230,7 +1133,6 @@ def run_leaf_morpho_batch(
                     output_mode,
                     mask_method,
                     threshold_value,
-                    scale_axis,
                     save_measurement_axes,
                     execution_device,
                 )
@@ -1248,7 +1150,6 @@ def run_leaf_morpho_batch(
                     output_mode,
                     mask_method,
                     threshold_value,
-                    scale_axis,
                     save_measurement_axes,
                     execution_device,
                 ): input_image
