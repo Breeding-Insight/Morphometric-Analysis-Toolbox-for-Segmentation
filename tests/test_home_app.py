@@ -62,6 +62,31 @@ def test_home_page_renders_compute_status_without_worker_control():
     assert [item.value for item in app.subheader if item.value == "Compute status"] == ["Compute status"]
 
 
+def test_home_page_offers_input_and_output_folder_pickers():
+    app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
+
+    assert not app.exception
+    assert app.button(key="choose_input_folder").label == "Choose input folder"
+    assert app.button(key="choose_output_folder").label == "Choose output folder"
+    assert app.text_input(key="input_directory").value == str(Path.home())
+    assert app.text_input(key="output_directory").value == str(
+        Path.home() / "mats_outputs"
+    )
+
+
+def test_home_page_has_a_dedicated_launch_section():
+    app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
+
+    assert not app.exception
+    assert any(item.value == "Launch analysis" for item in app.subheader)
+    launch_button = app.button(key="run_leaf_morphometrics")
+    assert launch_button.label == "Run leaf morphometrics"
+    assert launch_button.icon == ":material/rocket_launch:"
+    assert launch_button.proto.type == "primary"
+    assert launch_button.disabled
+    assert any("preflight" in item.value for item in app.markdown)
+
+
 def test_cpu_options_page_renders_worker_control():
     app = AppTest.from_file(str(CPU_OPTIONS_PAGE)).run(timeout=30)
 

@@ -13,7 +13,9 @@ hardware diagnostics).
 
 ## Home — measuring leaves
 
-1. **Image source.** Choose a local folder (type its path) or upload images.
+1. **Image source.** Choose a local folder with the desktop folder picker (or
+   type its path manually), or upload images. The output folder has the same
+   picker and manual-entry options.
    Accepted: `.jpg .jpeg .png .tif .tiff .bmp`.
 2. **Output folder.** Where masks and target boxes are written (defaults to
    `~/mats_outputs`).
@@ -24,7 +26,7 @@ hardware diagnostics).
    QR reading more robust against glare, skew, or blur.
 4. **Segmentation method.** *Classic thresholding (Otsu)* (fast, default; best
    on clean backgrounds) or *BiRefNet* (more accurate on cluttered backgrounds;
-   uses a GPU when available; needs the ~2.65 GB checkpoint).
+   uses a GPU when available; needs its optional ~2.65 GB local checkpoint).
 5. **Output options.** Pick the **Full research schema** CSV for area/width/length
    plus per-axis `px_per_cm_width`/`px_per_cm_height` and a `scale_aspect_ratio`
    QC column, or **Compact** for a trimmed export. Optionally write a failures log.
@@ -49,7 +51,9 @@ the browser tab open until they finish.
 - **RF-DETR checkpoint (red)** — run `mats fetch-weights`, or set
   `MATS_WEIGHTS_DIR`. See [weights.md](weights.md).
 - **BiRefNet checkpoint (yellow)** — open **BiRefNet setup** in the sidebar to
-  install it, or pre-stage it with `MATS_WEIGHTS_DIR` / `BIREFNET_CHECKPOINT`.
+  explicitly fetch it from this repository, or pre-stage it with
+  `MATS_WEIGHTS_DIR` / `BIREFNET_CHECKPOINT`. It is never downloaded when Otsu
+  is selected.
   CPU-only BiRefNet is also yellow but remains supported.
 - **Template dimensions (yellow)** — only shown in **Variable dimensions** (QR)
   mode when the optional enhanced QR extra isn't installed; OpenCV-only

@@ -6,6 +6,7 @@ import streamlit as st
 
 from mats import weights
 from mats.app import branding
+from mats.birefnet_runtime import birefnet_runtime_status
 from mats.devices import birefnet_device_report
 
 
@@ -30,9 +31,8 @@ branding.apply_logo()
 
 st.title("BiRefNet setup")
 st.caption(
-    "Install the optional leaf-segmentation model once. It's committed to this repository "
-    "via Git LFS, but excluded from a plain `git clone` to keep clones small -- install it "
-    "here from Hugging Face or straight from this repository."
+    "BiRefNet is optional. MATS uses it only when its checkpoint is already installed locally; "
+    "choosing Otsu never downloads or loads it."
 )
 
 device = birefnet_device_report()
@@ -45,6 +45,11 @@ with st.container(border=True):
     )
     if device.torch_version:
         st.caption(f"PyTorch {device.torch_version} · selected device: {device.device}")
+
+runtime = birefnet_runtime_status()
+with st.container(border=True):
+    st.subheader("Local runtime")
+    _show_status("success" if runtime.ready else "error", runtime.detail)
 
 status = weights.get_weight_status("birefnet")
 with st.container(border=True):
@@ -66,42 +71,25 @@ with st.container(border=True):
     except OSError:
         pass
 
-    by_id = {source.id: source for source in status.sources}
-    available = [source for source in status.sources if source.available]
-
-    if not available:
+    lfs = next(source for source in status.sources if source.id == "lfs")
+    if not lfs.available:
         st.info(
-            "Neither download source is available in this build. Set `MATS_WEIGHTS_HF_REPO` "
-            "to a Hugging Face repository, or run this page from a Git clone with Git LFS "
-            "installed. See the manual options below."
+            "Automatic model downloads are disabled. To fetch the optional checkpoint here, "
+            "run this page from a Git checkout with Git LFS installed, or use one of the "
+            "manual local-placement options below."
         )
-        choice = None
+        can_fetch = False
     else:
-        captions = {
-            "hf": "Public download. Requires internet access to huggingface.co.",
-            "lfs": "Works on networks that block Hugging Face, including USDA. Requires this "
-                   "page to be running from a `git clone` with Git LFS installed.",
-        }
-        options = [source.id for source in status.sources]
-        choice = st.radio(
-            "Download source",
-            options=options,
-            format_func=lambda source_id: by_id[source_id].label,
-            captions=[
-                captions[source.id] if source.available else f"Unavailable: {source.reason}"
-                for source in status.sources
-            ],
-            index=next(i for i, source in enumerate(status.sources) if source.available),
-            key="birefnet_source",
+        st.caption(
+            "Fetch is explicit: the button below pulls the checkpoint from this repository via Git LFS."
         )
-        if not by_id[choice].available:
-            st.warning(f"{by_id[choice].label} is unavailable: {by_id[choice].reason}")
+        can_fetch = True
 
     if st.button(
-        "Download BiRefNet",
+        "Fetch BiRefNet from this repository",
         type="primary",
         icon=":material/download:",
-        disabled=choice is None or not by_id[choice].available or status.state == "ready",
+        disabled=not can_fetch or status.state == "ready",
         width="content",
         key="download_birefnet",
     ):
@@ -118,7 +106,7 @@ with st.container(border=True):
                 progress.progress(fraction, text=labels.get(phase, "Installing BiRefNet…"))
 
             try:
-                installed = weights.install_weight("birefnet", source=choice, progress_callback=update)
+                installed = weights.install_weight("birefnet", source="lfs", progress_callback=update)
             except weights.WeightDownloadError as exc:
                 install_status.update(label="BiRefNet installation failed", state="error", expanded=True)
                 st.error(str(exc))

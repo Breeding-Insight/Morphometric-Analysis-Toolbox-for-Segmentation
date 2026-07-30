@@ -16,6 +16,7 @@ from mats.app.compute import (
     resolve_execution_plan,
     selected_mask_method,
 )
+from mats.app.folder_picker import FolderPickerError, choose_folder
 from mats.template_layout import (
     format_measurement,
     maximum_template_edge,
@@ -30,6 +31,9 @@ APP_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT_DIR = Path.home()
 DEFAULT_OUTPUT_DIR = Path.home() / "mats_outputs"
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
+INPUT_DIR_KEY = "input_directory"
+OUTPUT_DIR_KEY = "output_directory"
+FOLDER_PICKER_ERROR_KEY = "folder_picker_error"
 
 
 @st.cache_resource
@@ -222,6 +226,21 @@ def _qr_mode_changed():
         st.session_state[DIMENSIONS_TEXT_KEY] = cached or _compose_dimensions_text()
 
 
+def _choose_folder(widget_key, title):
+    """Open a local desktop picker and copy the result into a path widget."""
+    try:
+        selected = choose_folder(title, st.session_state[widget_key])
+    except FolderPickerError as exc:
+        st.session_state[FOLDER_PICKER_ERROR_KEY] = (
+            f"{exc}. Enter the folder path manually instead."
+        )
+        return
+
+    st.session_state.pop(FOLDER_PICKER_ERROR_KEY, None)
+    if selected:
+        st.session_state[widget_key] = selected
+
+
 @st.dialog(
     "Enhanced QR reading is not installed",
     width="medium",
@@ -265,6 +284,8 @@ def main():
     st.session_state.setdefault(DIMENSIONS_TEXT_KEY, "12x12in")
     st.session_state.setdefault(QR_MODE_KEY, False)
     st.session_state.setdefault("segmentation_method", "Classic thresholding (Otsu)")
+    st.session_state.setdefault(INPUT_DIR_KEY, str(DEFAULT_INPUT_DIR))
+    st.session_state.setdefault(OUTPUT_DIR_KEY, str(DEFAULT_OUTPUT_DIR))
 
     st.title("Morphometric Analysis Toolbox for Segmentation")
     st.caption("RF-DETR marker detection with Otsu threshold or BiRefNet segmentation.")
@@ -358,7 +379,20 @@ def main():
         uploaded_files = []
         input_dir = ""
         if input_source == "Local folder":
-            input_dir = st.text_input("Input folder", value=str(DEFAULT_INPUT_DIR))
+            input_dir = st.text_input(
+                "Input folder",
+                key=INPUT_DIR_KEY,
+                icon=":material/folder:",
+                persist_state="page",
+            )
+            st.button(
+                "Choose input folder",
+                key="choose_input_folder",
+                icon=":material/folder_open:",
+                width="stretch",
+                on_click=_choose_folder,
+                args=(INPUT_DIR_KEY, "Choose the folder containing input images"),
+            )
         else:
             uploaded_files = st.file_uploader(
                 "Upload images",
@@ -367,7 +401,23 @@ def main():
             )
 
         st.header("Outputs")
-        output_dir = st.text_input("Output folder", value=str(DEFAULT_OUTPUT_DIR))
+        output_dir = st.text_input(
+            "Output folder",
+            key=OUTPUT_DIR_KEY,
+            icon=":material/folder:",
+            persist_state="page",
+        )
+        st.button(
+            "Choose output folder",
+            key="choose_output_folder",
+            icon=":material/folder_open:",
+            width="stretch",
+            on_click=_choose_folder,
+            args=(OUTPUT_DIR_KEY, "Choose where MATS should write its outputs"),
+        )
+        folder_picker_error = st.session_state.pop(FOLDER_PICKER_ERROR_KEY, None)
+        if folder_picker_error:
+            st.warning(folder_picker_error, icon=":material/folder_off:")
 
         st.header("Measurement")
         use_qr = st.checkbox(
@@ -431,9 +481,9 @@ def main():
                 help="Vertical size of the printed sheet, snapped to the nearest 0.5.",
                 on_change=_measure_dimensions_changed,
                 persist_state="page",
-            )
+        )
         segmentation_label = st.selectbox(
-            "Segmentation method",
+            "**Segmentation method**",
             ["Classic thresholding (Otsu)", "BiRefNet"],
             key="segmentation_method",
             persist_state="session",
@@ -486,17 +536,30 @@ def main():
     checks.append(("Pipeline library", "success", False, f"mats.core ({Path(lm.__file__).parent})", None))
 
     from mats import weights
+    from mats.birefnet_runtime import birefnet_runtime_status
     from mats.devices import birefnet_device_report
 
     rfdetr_status = weights.get_weight_status("rf-detr")
     rfdetr_level = "success" if rfdetr_status.state == "ready" else "error"
     checks.append(("RF-DETR checkpoint", rfdetr_level, rfdetr_level == "error", rfdetr_status.detail, None))
 
+    birefnet_runtime = birefnet_runtime_status()
+    if mask_method == "birefnet":
+        runtime_level = "success" if birefnet_runtime.ready else "error"
+        checks.append((
+            "BiRefNet runtime", runtime_level, not birefnet_runtime.ready,
+            birefnet_runtime.detail, None,
+        ))
+
     birefnet_status = weights.get_weight_status("birefnet")
     birefnet_level = "success" if birefnet_status.state == "ready" else "warning"
     checks.append((
         "BiRefNet checkpoint", birefnet_level, mask_method == "birefnet" and birefnet_status.state != "ready",
-        birefnet_status.detail if birefnet_status.state != "ready" else f"Installed at {birefnet_status.path}",
+        (
+            birefnet_status.detail
+            if birefnet_status.state != "ready"
+            else f"Ready locally at {birefnet_status.path}; no download is needed."
+        ),
         "pages/2_BiRefNet_Setup.py" if birefnet_status.state != "ready" else None,
     ))
 
@@ -584,22 +647,66 @@ def main():
     ready = not any(blocking for _, _, blocking, _, _ in checks)
 
     image_count = len(image_paths) if input_source == "Local folder" else valid_upload_count
-    large_batch_ok = True
-    if ready and image_count > LARGE_BATCH_THRESHOLD:
-        st.warning(
-            f"This is a large batch ({image_count} images). Processing runs synchronously "
-            "and may take a long time; the browser tab must stay open."
-        )
-        large_batch_ok = st.checkbox(
-            f"I understand and want to process {image_count} images",
-            value=False,
+    blocking_count = sum(
+        1 for _, _, blocking, _, _ in checks if blocking
+    )
+    with st.container(border=True, key="launch_analysis"):
+        st.subheader("Launch analysis", anchor=False)
+        launch_status = st.empty()
+        st.caption(
+            f"{image_count} image{'s' if image_count != 1 else ''} · "
+            f"{segmentation_label} · {execution_plan.label} · "
+            f"Output: `{output_path}`"
         )
 
-    run_clicked = st.button(
-        "Run Leaf Morphometrics",
-        type="primary",
-        disabled=not (ready and large_batch_ok),
-    )
+        large_batch_ok = True
+        if ready and image_count > LARGE_BATCH_THRESHOLD:
+            st.warning(
+                f"This is a large batch ({image_count} images). Processing runs "
+                "synchronously and may take a long time; keep the browser tab open.",
+                icon=":material/schedule:",
+            )
+            large_batch_ok = st.checkbox(
+                f"I understand and want to process {image_count} images",
+                value=False,
+            )
+
+        launch_enabled = ready and large_batch_ok
+        if not ready:
+            item_label = "item needs" if blocking_count == 1 else "items need"
+            launch_status.badge(
+                f"{blocking_count} preflight {item_label} attention",
+                icon=":material/error:",
+                color="red",
+            )
+            st.caption(
+                "Resolve the blocking preflight messages above to enable analysis."
+            )
+        elif not large_batch_ok:
+            launch_status.badge(
+                "Large-batch confirmation required",
+                icon=":material/pending_actions:",
+                color="orange",
+            )
+        else:
+            launch_status.badge(
+                "Ready to analyze",
+                icon=":material/check_circle:",
+                color="green",
+            )
+
+        run_clicked = st.button(
+            "Run leaf morphometrics",
+            key="run_leaf_morphometrics",
+            type="primary",
+            icon=":material/rocket_launch:",
+            disabled=not launch_enabled,
+            width="stretch",
+            help=(
+                "Start marker detection, segmentation, and morphometric measurement "
+                "for the selected images."
+            ),
+        )
     if run_clicked:
         output_path.mkdir(parents=True, exist_ok=True)
         run_sample_ids = []

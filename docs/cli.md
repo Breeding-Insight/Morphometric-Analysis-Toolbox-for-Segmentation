@@ -51,7 +51,7 @@ threshold`.
 ```bash
 mats fetch-weights                 # RF-DETR only (default)
 mats fetch-weights --all           # both checkpoints
-mats fetch-weights --only birefnet # just BiRefNet
+mats fetch-weights --only birefnet --source lfs # explicitly fetch just BiRefNet
 mats fetch-weights --force         # re-download even if present
 ```
 

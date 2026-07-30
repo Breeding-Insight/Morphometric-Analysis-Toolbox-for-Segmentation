@@ -70,7 +70,6 @@ from .devices import available_cpu_workers, birefnet_device_report, worker_risk_
 RF_DETR_MARKER_RESOLUTION = 1120
 RF_DETR_MARKER_CONFIDENCE = 0.5
 RF_DETR_MARKER_PAD_COLOR = (0, 0, 0)
-BIREFNET_PRETRAINED = "ZhengPeng7/BiRefNet"
 BIREFNET_IMAGE_SIZE = 2048
 BIREFNET_THRESHOLD = 0.5
 BIREFNET_MEAN = [0.485, 0.456, 0.406]
@@ -214,7 +213,12 @@ def resolve_birefnet_device(device_override=None):
 
 
 def get_birefnet_model(device_override=None):
-    """Lazy-load one fine-tuned BiRefNet model per requested device."""
+    """Lazy-load one locally installed fine-tuned BiRefNet model per device.
+
+    The model definition ships with MATS.  A selected BiRefNet run therefore
+    never retrieves remote model code or upstream weights; it only uses the
+    locally resolved MATS checkpoint.
+    """
     device = resolve_birefnet_device(device_override)
     cache_key = str(device)
     if cache_key not in _BIREFNET_MODELS:
@@ -222,21 +226,19 @@ def get_birefnet_model(device_override=None):
             if cache_key in _BIREFNET_MODELS:
                 return _BIREFNET_MODELS[cache_key]
             from . import weights
-            checkpoint = weights.ensure_weight("birefnet")  # resolves or auto-fetches once
+            from .birefnet_runtime import require_birefnet_dependencies
+            from .models.birefnet import create_birefnet_model
 
-            from transformers import AutoModelForImageSegmentation
-
-            model = AutoModelForImageSegmentation.from_pretrained(
-                BIREFNET_PRETRAINED,
-                trust_remote_code=True,
-            )
+            require_birefnet_dependencies()
+            checkpoint = weights.require_local_weight("birefnet")
+            model = create_birefnet_model()
             ckpt = torch.load(
                 str(checkpoint),
                 map_location=device,
-                weights_only=False,
+                weights_only=True,
             )
             state_dict = ckpt.get("model_state_dict", ckpt)
-            model.load_state_dict(state_dict, strict=False)
+            model.load_state_dict(state_dict, strict=True)
             model = model.to(device)
             model.eval()
             _BIREFNET_MODELS[cache_key] = model

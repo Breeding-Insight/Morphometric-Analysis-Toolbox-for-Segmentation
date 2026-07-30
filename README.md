@@ -10,7 +10,7 @@ Pipeline in one line: **detect markers → perspective-correct → segment leaf 
 measure → CSV**.
 
 > Companion code for the manuscript (target journal: *Plant Phenomics*).
-> Model weights are hosted available for download here or usable through hugging face (see [Model weights](#model-weights)).
+> BiRefNet is optional and runs entirely from a locally installed checkpoint (see [Model weights](#model-weights)).
 > For USDA users the model weights are hosted on Agdatacommons and the pipeline is available on SciNET
 
 ---
@@ -48,7 +48,7 @@ Then fetch the model weights once and confirm the environment:
 
 ```bash
 mats fetch-weights      # fetches the ~134 MB RF-DETR checkpoint (mandatory, default)
-mats fetch-weights --all # also fetches the ~2.65 GB BiRefNet checkpoint
+mats fetch-weights --only birefnet --source lfs # optional: explicitly fetch the ~2.65 GB BiRefNet checkpoint
 mats doctor             # checks weights, GPU/CPU device, QR backends
 ```
 
@@ -75,7 +75,7 @@ This opens the Streamlit GUI in your browser. From there:
 2. **Set the scale** — enter the printed sheet's width, height, and unit (e.g.
    `10.5 x 9.5 in`), or tick **Variable dimensions, read QR code** to read it
    from each image's template QR code automatically.
-3. **Choose segmentation** — Otsu threshold (fast, default) or BiRefNet (accurate).
+3. **Choose segmentation** — Otsu threshold (fast, default) or BiRefNet (accurate when its optional local checkpoint is installed).
 4. **Choose workers** — the app detects the CPUs assigned to it. One worker uses
    CUDA/MPS when available; two or more workers use parallel CPU processing and
    disable CUDA/MPS for that run. A colored warning light shows CPU allocation;
@@ -152,29 +152,23 @@ A `leaf_morpho_failures.csv` records per-image warnings and failures.
 
 ## Model weights
 
-The checkpoints are too large for GitHub, so they are hosted on Hugging Face and
-resolved at runtime:
+The checkpoints are tracked in this repository with Git LFS:
 
 | Model | File | Size |
 |---|---|---|
 | RF-DETR marker detector | `rf_detr_marker.pth` | ~134 MB |
 | BiRefNet leaf segmenter | `birefnet_leaf.pth` | ~2.65 GB |
 
-RF-DETR is committed to this repo via Git LFS, so a plain `git clone` gets it
-automatically — an interim delivery mechanism until Hugging Face hosting is
-configured. BiRefNet is **not** committed (that would force every clone to
-download 2.65 GB); it's fetched separately, only when you actually use it:
+RF-DETR is available in a normal checkout. BiRefNet is LFS-tracked but excluded
+from the default clone, so it is downloaded only through an explicit action:
 
-- **Auto-fetch (default)** — `mats fetch-weights` downloads the mandatory
-  RF-DETR checkpoint; BiRefNet is fetched only on request (first use of
-  `--mask-method birefnet`, or `mats fetch-weights --only birefnet` / `--all`).
+- **Otsu (default)** — needs no BiRefNet checkpoint and never downloads one.
+- **BiRefNet (optional)** — fetch explicitly with
+  `mats fetch-weights --only birefnet --source lfs`, or use the setup page.
 - **Shared filesystem** — set `MATS_WEIGHTS_DIR` (e.g. a SCINet `/project` path)
   to read weights in place with no per-user copy.
-- **Git LFS** — RF-DETR is committed to this repo (interim, until Hugging Face
-  hosting is live); BiRefNet is intentionally not committed.
 
-Set `MATS_NO_AUTO_FETCH=1` to disable the automatic download (e.g. on an HPC login
-node). Full detail, DOI, and checksums: [docs/weights.md](docs/weights.md).
+Full detail and checksums: [docs/weights.md](docs/weights.md).
 
 ---
 
@@ -222,7 +216,7 @@ Run `MATS doctor` first — it reports most of these.
 
 ## Citing
 
-If you use MATS, please cite the manuscript and the Hugging Face weights deposit.
+If you use MATS, please cite the manuscript.
 See [CITATION.cff](CITATION.cff).
 
 ## License

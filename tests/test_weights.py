@@ -91,6 +91,24 @@ def test_ensure_weight_returns_present_file(monkeypatch, tmp_path):
     assert weights.ensure_weight("rf-detr") == real
 
 
+def test_require_local_weight_returns_present_checkpoint_without_fetch(monkeypatch, tmp_path):
+    weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
+    real = tmp_path / "birefnet_leaf.pth"
+    real.write_bytes(b"\x80\x02" + b"x" * 4096)
+    monkeypatch.setitem(weights._MANIFEST["birefnet"], "size_bytes", real.stat().st_size)
+    monkeypatch.setattr(weights, "ensure_weight", lambda name: pytest.fail("must not auto-fetch"))
+
+    assert weights.require_local_weight("birefnet") == real
+
+
+def test_require_local_weight_missing_never_attempts_fetch(monkeypatch, tmp_path):
+    weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
+    monkeypatch.setattr(weights, "ensure_weight", lambda name: pytest.fail("must not auto-fetch"))
+
+    with pytest.raises(FileNotFoundError, match="not installed locally"):
+        weights.require_local_weight("birefnet")
+
+
 def test_ensure_weight_honors_no_auto_fetch(monkeypatch, tmp_path):
     weights = _fresh_weights(
         monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path), MATS_NO_AUTO_FETCH="1"
@@ -143,7 +161,7 @@ def test_available_sources_both_unavailable_by_default(monkeypatch, tmp_path):
     weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
     hf, lfs = weights.available_sources("birefnet")
     assert hf.available is False
-    assert "configured" in hf.reason
+    assert "local-only" in hf.reason
     assert lfs.available is False
     assert "checkout" in lfs.reason.lower()
 
@@ -162,7 +180,7 @@ def test_available_sources_hf_available_when_configured(monkeypatch, tmp_path):
     weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
     monkeypatch.setattr(weights, "_HF_REPO_ID", "org/mats-weights")
     monkeypatch.setattr(weights, "_hf_available", lambda: True)
-    hf, lfs = weights.available_sources("birefnet")
+    hf, lfs = weights.available_sources("rf-detr")
     assert hf.available is True
 
 
@@ -221,7 +239,7 @@ def test_download_from_lfs_failure(monkeypatch, tmp_path):
 
 def test_install_weight_hf_source_without_repo_raises(monkeypatch, tmp_path):
     weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
-    with pytest.raises(weights.WeightDownloadError, match="Hugging Face"):
+    with pytest.raises(weights.WeightDownloadError, match="local-only"):
         weights.install_weight("birefnet", source="hf")
 
 

@@ -26,6 +26,12 @@ dependencies = [
     "transformers",
     "torch",
     "torchvision",
+    # Required by the bundled BiRefNet architecture.  They stay normal runtime
+    # dependencies so selecting BiRefNet never requires environment-specific
+    # setup beyond installing MATS itself.
+    "einops",
+    "kornia",
+    "timm",
     "opencv-python",
     "pillow",
     "numpy",
@@ -58,4 +64,4 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-mats = ["app/assets/*.svg"]
+mats = ["app/assets/*.svg", "models/birefnet/LICENSE"]

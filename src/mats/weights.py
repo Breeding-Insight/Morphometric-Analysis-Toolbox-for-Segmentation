@@ -111,7 +111,9 @@ def _is_git_checkout():
 
 def available_sources(name):
     """Return the (Hugging Face, Git LFS) download options for a checkpoint."""
-    if _HF_REPO_ID:
+    if name == "birefnet":
+        hf_reason = "BiRefNet checkpoints are local-only in this build."
+    elif _HF_REPO_ID:
         hf_reason = "" if _hf_available() else "huggingface_hub is not installed."
     else:
         hf_reason = "No Hugging Face repository is configured for this build."
@@ -532,6 +534,30 @@ def ensure_weight(name):
             f"docs/weights.md."
         )
     return present
+
+
+def require_local_weight(name):
+    """Return a ready local checkpoint without fetching it.
+
+    BiRefNet is optional and large, so inference must never start a download
+    merely because a user selected it.  Explicit setup actions may still use
+    :func:`install_weight` or :func:`fetch`.
+    """
+    if name not in _MANIFEST:
+        raise KeyError(f"Unknown checkpoint: {name}")
+
+    status = get_weight_status(name)
+    if status.state == "ready":
+        return status.path
+    if status.state == "invalid":
+        raise FileNotFoundError(
+            f"{_MANIFEST[name]['filename']} is invalid at {status.path}: {status.detail}"
+        )
+    raise FileNotFoundError(
+        f"{_MANIFEST[name]['filename']} is not installed locally. "
+        f"BiRefNet is optional; install it explicitly with "
+        f"`mats fetch-weights --only {name} --source lfs`, or place it at {status.path}."
+    )
 
 
 def _source_of(name, target):

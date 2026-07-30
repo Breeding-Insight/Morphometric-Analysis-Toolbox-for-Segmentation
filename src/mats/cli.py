@@ -56,8 +56,8 @@ def build_parser():
     run.add_argument('--mask-method', choices=('threshold', 'birefnet'), default='threshold',
                      help='Mask method when --output-mode masks. threshold (Otsu) is fast, needs '
                           'no GPU and no extra download; birefnet is more accurate on cluttered '
-                          'backgrounds but needs the ~2.65 GB checkpoint '
-                          '(fetch with `mats fetch-weights --only birefnet`).')
+                          'backgrounds but needs a locally installed ~2.65 GB checkpoint '
+                          '(`mats fetch-weights --only birefnet --source lfs`).')
     run.add_argument('--threshold-level', choices=('auto', 'low', 'medium', 'high'), default='auto',
                      help="For --mask-method threshold: auto uses Otsu (recommended); "
                           "low=100, medium=125, high=150.")
@@ -183,9 +183,24 @@ def _make_progress_callback():
     return _cb
 
 
+def _require_local_birefnet_for_run(args):
+    """Stop once, before a batch, when optional BiRefNet is unavailable."""
+    if args.output_mode != "masks" or args.mask_method != "birefnet":
+        return
+    from . import weights
+    from .birefnet_runtime import require_birefnet_dependencies
+
+    try:
+        require_birefnet_dependencies()
+        weights.require_local_weight("birefnet")
+    except (FileNotFoundError, RuntimeError) as exc:
+        _fail(str(exc))
+
+
 def _cmd_run(args):
     from . import core as lm
 
+    _require_local_birefnet_for_run(args)
     template_dims = _resolve_template_dims(args, lm)
     threshold_value = lm.THRESHOLD_LEVELS[args.threshold_level]
     _print_run_banner(args, threshold_value)

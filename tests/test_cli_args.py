@@ -2,7 +2,7 @@
 
 import pytest
 
-from mats.cli import build_parser, _normalize_argv, _resolve_fetch_only
+from mats.cli import build_parser, _normalize_argv, _require_local_birefnet_for_run, _resolve_fetch_only
 
 
 def test_default_subcommand_inserted():
@@ -45,6 +45,13 @@ def test_compact_and_axes_opt_in():
 def test_invalid_choice_rejected():
     with pytest.raises(SystemExit):
         build_parser().parse_args(["run", "-i", "x", "--mask-method", "nonsense"])
+
+
+def test_local_birefnet_preflight_skips_otsu(monkeypatch):
+    args = build_parser().parse_args(["run", "-i", "x", "--mask-method", "threshold"])
+    monkeypatch.setattr("mats.weights.require_local_weight", lambda name: pytest.fail("not needed"))
+
+    assert _require_local_birefnet_for_run(args) is None
 
 
 def test_fetch_weights_default_targets_rf_detr_only():
