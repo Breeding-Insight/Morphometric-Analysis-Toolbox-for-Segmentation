@@ -89,6 +89,8 @@ THRESHOLD_LEVELS = {
 }
 _MARKER_MODELS = {}
 _MARKER_MODEL_LOCK = threading.Lock()
+_MARKER_INFERENCE_LOCKS = {}
+_MARKER_INFERENCE_LOCKS_GUARD = threading.Lock()
 _BIREFNET_MODELS = {}
 _BIREFNET_MODEL_LOCK = threading.Lock()
 
@@ -126,6 +128,14 @@ def get_marker_model(device_override=None):
                     print(f"RF-DETR optimize_for_inference() skipped on {device}: {exc}")
             _MARKER_MODELS[device] = model
     return _MARKER_MODELS[device]
+
+
+def _marker_inference_lock(device):
+    """Return the single inference lane used by a CUDA/MPS RF-DETR model."""
+    if not (str(device).startswith("cuda") or str(device) == "mps"):
+        return None
+    with _MARKER_INFERENCE_LOCKS_GUARD:
+        return _MARKER_INFERENCE_LOCKS.setdefault(str(device), threading.Lock())
 
 
 def pad_to_square_for_rfdetr(
@@ -169,7 +179,17 @@ def unpad_xyxy(xyxy, pad_info):
 def detect_marker_geometry(image_bgr, confidence=RF_DETR_MARKER_CONFIDENCE, device_override=None):
     pil_img = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
     padded_img, pad_info = pad_to_square_for_rfdetr(pil_img)
-    detections = get_marker_model(device_override).predict(padded_img, threshold=confidence)
+    device = resolve_rfdetr_device(device_override)
+    model = get_marker_model(device_override)
+    inference_lock = _marker_inference_lock(device)
+    if inference_lock is None:
+        detections = model.predict(padded_img, threshold=confidence)
+    else:
+        # Hybrid Otsu workers share a single GPU model. Serializing only this
+        # inference call prevents concurrent VRAM pressure while CPU stages of
+        # other images continue in parallel.
+        with inference_lock:
+            detections = model.predict(padded_img, threshold=confidence)
     xyxy = np.asarray(detections.xyxy, dtype=np.float32)
     if xyxy.size == 0:
         return np.empty((0, 2), dtype=np.int32), np.empty((0, 4), dtype=np.int32)
@@ -798,8 +818,8 @@ def leaf_morpho(
     save_measurement_axes=True,
     execution_device="auto",
 ):
-    if execution_device not in {"auto", "cpu"}:
-        raise ValueError("execution_device must be 'auto' or 'cpu'")
+    if execution_device not in {"auto", "cpu", "hybrid"}:
+        raise ValueError("execution_device must be 'auto', 'cpu', or 'hybrid'")
     device_override = "cpu" if execution_device == "cpu" else None
     if physical_dimensions is not None:
         template_dimensions = physical_dimensions
@@ -898,8 +918,9 @@ def leaf_morpho(
 
             # Extract QR elements
             if not retval:
-                hint = ("supply template dimensions (CLI -t, e.g. -t 10.5x9.5in, or "
-                        "the GUI's dimensions field) to measure without a QR code")
+                hint = ("supply template dimensions (CLI -t, e.g. -t 10.5x9.5in, or in "
+                        "the GUI untick 'Variable dimensions' and enter width/height) "
+                        "to measure without a QR code")
                 if not _enhanced_qr_available():
                     hint += ('; for tougher codes, install enhanced QR reading:  '
                              'pip install "mats-morpho[qr]"')
@@ -1103,19 +1124,23 @@ def run_leaf_morpho_batch(
     execution_device="auto",
     worker_safety_check=False,
     break_glass_acknowledged=False,
+    birefnet_parallel_acknowledged=False,
 ):
     """Run the leaf morphometrics pipeline with per-image error isolation.
 
-    ``execution_device='cpu'`` explicitly routes RF-DETR and BiRefNet to CPU,
-    making multi-worker application runs safe. ``auto`` preserves the existing
-    accelerator selection behavior. ``serialize_model_inference`` remains a
-    conservative guard for callers that do not request CPU parallel execution.
-    When ``worker_safety_check`` is enabled, counts above 75% of the available
-    CPU allocation require an explicit ``break_glass_acknowledged`` override.
+    ``execution_device='cpu'`` explicitly routes RF-DETR and BiRefNet to CPU.
+    ``hybrid`` keeps RF-DETR on its automatic accelerator while allowing the
+    CPU-only Otsu and measurement stages to fan out across workers. ``auto``
+    preserves serial accelerator selection. When ``worker_safety_check`` is
+    enabled, counts above 75% of the available CPU allocation require an
+    explicit ``break_glass_acknowledged`` override. CPU-parallel BiRefNet
+    additionally requires its own explicit acknowledgement.
     """
     input_images = list(input_images or [])
-    if execution_device not in {"auto", "cpu"}:
-        raise ValueError("execution_device must be 'auto' or 'cpu'")
+    if execution_device not in {"auto", "cpu", "hybrid"}:
+        raise ValueError("execution_device must be 'auto', 'cpu', or 'hybrid'")
+    if execution_device == "hybrid" and mask_method != "threshold":
+        raise ValueError("hybrid execution is currently supported for Otsu thresholding only")
     if output_dir is not False:
         os.makedirs(output_dir, exist_ok=True)
 
@@ -1135,10 +1160,14 @@ def run_leaf_morpho_batch(
                 f"{workers} workers uses {worker_risk.utilization:.0%} of the available CPU allocation. "
                 "High-risk worker counts require break-glass acknowledgement."
             )
+        if mask_method == "birefnet" and workers > 1 and not birefnet_parallel_acknowledged:
+            raise ValueError(
+                "CPU-parallel BiRefNet requires a separate break-glass acknowledgement."
+            )
     all_target_boxes = bool(input_images) and all(is_target_box_image(p) for p in input_images)
     if (
         serialize_model_inference
-        and execution_device != "cpu"
+        and execution_device == "auto"
         and workers > 1
         and (mask_method == "birefnet" or not all_target_boxes)
     ):

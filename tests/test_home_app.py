@@ -8,6 +8,7 @@ from mats.app.Home import collect_output_pairs, merge_viewer_pairs
 
 
 HOME_PAGE = Path(__file__).resolve().parents[1] / "src" / "mats" / "app" / "Home.py"
+CPU_OPTIONS_PAGE = HOME_PAGE.parent / "pages" / "3_CPU_Options.py"
 
 
 def _write_output_pair(output_dir, sample_id):
@@ -53,8 +54,51 @@ def test_merge_viewer_pairs_accumulates_current_session_without_duplicates():
     assert pairs == [updated, second]
 
 
-def test_home_page_renders_worker_safety_control():
+def test_home_page_renders_compute_status_without_worker_control():
     app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
 
     assert not app.exception
-    assert [item.label for item in app.number_input if item.label == "Workers"] == ["Workers"]
+    assert [item.label for item in app.number_input] == ["Width", "Height"]
+    assert [item.value for item in app.subheader if item.value == "Compute status"] == ["Compute status"]
+
+
+def test_cpu_options_page_renders_worker_control():
+    app = AppTest.from_file(str(CPU_OPTIONS_PAGE)).run(timeout=30)
+
+    assert not app.exception
+    assert [item.label for item in app.number_input] == ["CPU workers"]
+
+
+def test_home_page_defaults_to_manual_dimensions():
+    app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
+
+    assert not app.exception
+    assert app.checkbox(key="measure_use_qr").value is False
+    width_input, height_input = app.number_input
+    assert width_input.value == 12.0
+    assert height_input.value == 12.0
+    assert not width_input.disabled
+    assert not height_input.disabled
+    dimensions_bar = [i for i in app.text_input if i.label == "Template dimensions"][0]
+    assert dimensions_bar.value == "12x12in"
+
+
+def test_qr_mode_disables_manual_dimension_inputs():
+    app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
+
+    app.checkbox(key="measure_use_qr").check().run(timeout=30)
+
+    assert not app.exception
+    assert all(item.disabled for item in app.number_input)
+    dimensions_bar = [i for i in app.text_input if i.label == "Template dimensions"][0]
+    assert dimensions_bar.value == "Variable dimensions — QR-derived"
+
+
+def test_unit_conversion_preserves_size_without_snapping():
+    app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
+
+    app.segmented_control(key="measure_unit").set_value("cm").run(timeout=30)
+
+    width_input, height_input = app.number_input
+    assert width_input.value == pytest.approx(30.48)
+    assert height_input.value == pytest.approx(30.48)

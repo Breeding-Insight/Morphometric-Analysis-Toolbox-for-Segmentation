@@ -8,6 +8,20 @@ from pathlib import Path
 import streamlit as st
 
 from mats.app import branding
+from mats.app.compute import (
+    birefnet_parallel_unlocked,
+    break_glass_unlocked,
+    get_compute_settings,
+    reengage_gpu,
+    resolve_execution_plan,
+    selected_mask_method,
+)
+from mats.template_layout import (
+    format_measurement,
+    maximum_template_edge,
+    minimum_template_edge,
+    round_to_increment,
+)
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -155,45 +169,81 @@ def merge_viewer_pairs(existing_pairs, new_pairs):
     return merged
 
 
+QR_MODE_KEY = "measure_use_qr"
+UNIT_KEY = "measure_unit"
+PREVIOUS_UNIT_KEY = "measure_previous_unit"
+WIDTH_KEY = "measure_width"
+HEIGHT_KEY = "measure_height"
+DIMENSIONS_TEXT_KEY = "measure_dimensions_text"
+MANUAL_TEXT_CACHE_KEY = "measure_manual_dimensions_cache"
+QR_NOTICE_KEY = "measure_qr_extra_notice_pending"
+
+
+def _compose_dimensions_text():
+    unit = st.session_state[UNIT_KEY]
+    return (
+        f"{format_measurement(st.session_state[WIDTH_KEY])}"
+        f"x{format_measurement(st.session_state[HEIGHT_KEY])}{unit}"
+    )
+
+
+def _measure_dimensions_changed():
+    """Keep the Width/Height selectors on the 0.5 grid and mirror them into the bar."""
+    for key in (WIDTH_KEY, HEIGHT_KEY):
+        st.session_state[key] = round_to_increment(st.session_state[key])
+    st.session_state[DIMENSIONS_TEXT_KEY] = _compose_dimensions_text()
+
+
+def _convert_measure_unit():
+    """Convert Width/Height to the new unit, snapped to the nearest 0.5."""
+    previous = st.session_state[PREVIOUS_UNIT_KEY]
+    current = st.session_state[UNIT_KEY]
+    if previous == current:
+        return
+    factor = 2.54 if previous == "in" and current == "cm" else 1.0 / 2.54
+    minimum = minimum_template_edge(current)
+    maximum = maximum_template_edge(current)
+    for key in (WIDTH_KEY, HEIGHT_KEY):
+        converted = round_to_increment(st.session_state[key] * factor)
+        st.session_state[key] = min(max(converted, minimum), maximum)
+    st.session_state[PREVIOUS_UNIT_KEY] = current
+    st.session_state[DIMENSIONS_TEXT_KEY] = _compose_dimensions_text()
+
+
+def _qr_mode_changed():
+    """Swap the dimensions bar to a QR placeholder, caching the manual entry."""
+    if st.session_state[QR_MODE_KEY]:
+        st.session_state[QR_NOTICE_KEY] = True
+        st.session_state[MANUAL_TEXT_CACHE_KEY] = st.session_state[DIMENSIONS_TEXT_KEY]
+        st.session_state[DIMENSIONS_TEXT_KEY] = "Variable dimensions — QR-derived"
+    else:
+        st.session_state.pop(QR_NOTICE_KEY, None)
+        cached = st.session_state.pop(MANUAL_TEXT_CACHE_KEY, None)
+        st.session_state[DIMENSIONS_TEXT_KEY] = cached or _compose_dimensions_text()
+
+
 @st.dialog(
-    "Break glass: high-risk CPU allocation",
+    "Enhanced QR reading is not installed",
     width="medium",
-    icon=":material/warning:",
+    icon=":material/qr_code_scanner:",
     dismissible=False,
 )
-def confirm_high_risk_workers(available_workers):
-    """Require an explicit, single-run acknowledgement for >75% CPU use."""
-    dialog_nonce = st.session_state.get("break_glass_dialog_nonce", 0)
-    st.error(
-        f"You are unlocking up to {available_workers} workers. This can use more than "
-        "75% of the CPU allocation and may freeze or crash the computer."
+def warn_enhanced_qr_missing():
+    st.warning(
+        "Only OpenCV's QR decoder is available. It misses codes with glare, skew, "
+        "or blur, and those images fail with no measurement scale."
     )
     st.markdown(
-        "- Save important work and close unnecessary applications first.\n"
-        "- Model-backed runs can consume substantial memory and increase heat/fan activity.\n"
-        "- Other users of this shared server may be affected.\n"
-        "- CUDA/MPS remains disabled whenever more than one worker is selected."
+        'Install the optional extra:\n\n```\npip install "mats-morpho[qr]"\n```\n\n'
+        "`pyzbar` also needs the system `zbar` library:\n\n"
+        "- Linux: `apt install libzbar0`\n"
+        "- macOS: `brew install zbar`\n"
+        "- conda: `conda install -c conda-forge zbar`\n\n"
+        "Restart the app after installing. You can also untick **Variable "
+        "dimensions** and enter width and height manually."
     )
-    saved_work = st.checkbox(
-        "I have saved important work and closed unnecessary applications.",
-        key=f"break_glass_saved_work_{dialog_nonce}",
-    )
-    understands_risk = st.checkbox(
-        "I understand this run may freeze or crash the computer.",
-        key=f"break_glass_understands_risk_{dialog_nonce}",
-    )
-    if st.button("Keep the safe worker limit", width="stretch"):
-        st.session_state["break_glass_dialog_nonce"] = dialog_nonce + 1
-        st.rerun()
-    if st.button(
-        "Break the glass for one run",
-        type="primary",
-        icon=":material/warning:",
-        width="stretch",
-        disabled=not (saved_work and understands_risk),
-    ):
-        st.session_state["break_glass_available_workers"] = available_workers
-        st.session_state["break_glass_dialog_nonce"] = dialog_nonce + 1
+    if st.button("Continue with OpenCV only", type="primary", width="stretch"):
+        st.session_state[QR_NOTICE_KEY] = False
         st.rerun()
 
 
@@ -208,6 +258,13 @@ def main():
     # manifest is discarded when the browser session closes and is never rebuilt
     # by scanning artifacts left by earlier sessions.
     st.session_state.setdefault("viewer_pairs", [])
+    st.session_state.setdefault(UNIT_KEY, "in")
+    st.session_state.setdefault(PREVIOUS_UNIT_KEY, "in")
+    st.session_state.setdefault(WIDTH_KEY, 12.0)
+    st.session_state.setdefault(HEIGHT_KEY, 12.0)
+    st.session_state.setdefault(DIMENSIONS_TEXT_KEY, "12x12in")
+    st.session_state.setdefault(QR_MODE_KEY, False)
+    st.session_state.setdefault("segmentation_method", "Classic thresholding (Otsu)")
 
     st.title("Morphometric Analysis Toolbox for Segmentation")
     st.caption("RF-DETR marker detection with Otsu threshold or BiRefNet segmentation.")
@@ -246,6 +303,54 @@ def main():
         st.caption(f"Current interpreter: {sys.executable}")
         st.stop()
 
+    mask_method = selected_mask_method()
+    compute_settings = get_compute_settings(lm)
+    available_workers = compute_settings.available_workers
+    birefnet_parallel_is_unlocked = birefnet_parallel_unlocked(available_workers)
+    execution_plan = resolve_execution_plan(
+        compute_settings,
+        mask_method,
+        birefnet_parallel_allowed=birefnet_parallel_is_unlocked,
+    )
+    workers = execution_plan.workers
+    worker_risk = lm.worker_risk_report(workers, available_workers)
+    break_glass_is_unlocked = break_glass_unlocked(available_workers)
+    execution_device = execution_plan.execution_device
+
+    with st.container(border=True):
+        st.subheader("Compute status")
+        st.badge(
+            execution_plan.label,
+            icon=":material/check_circle:" if execution_plan.uses_gpu else ":material/memory:",
+            color="green" if execution_plan.uses_gpu else "orange",
+        )
+        st.caption(execution_plan.detail)
+        if mask_method == "birefnet" and not execution_plan.uses_gpu:
+            gpu_notice = (
+                "GPU available but disabled. BiRefNet is running on CPU because an advanced "
+                "CPU-only override is active."
+                if compute_settings.accelerator_available
+                else "No usable GPU was detected. BiRefNet is running on CPU."
+            )
+            st.warning(
+                f"{gpu_notice} This may be substantially slower and use significant system memory.",
+                icon=":material/warning:",
+            )
+        if compute_settings.accelerator_available and compute_settings.cpu_active:
+            if st.button(
+                "Re-engage GPU",
+                icon=":material/restart_alt:",
+                width="content",
+            ):
+                reengage_gpu()
+                st.rerun()
+        st.page_link(
+            "pages/3_CPU_Options.py",
+            label="Open compute options",
+            icon=":material/tune:",
+            width="content",
+        )
+
     with st.sidebar:
         st.header("Inputs")
         input_source = st.radio("Image source", ["Local folder", "Upload images"])
@@ -264,15 +369,73 @@ def main():
         output_dir = st.text_input("Output folder", value=str(DEFAULT_OUTPUT_DIR))
 
         st.header("Measurement")
-        template_dimensions_text = st.text_input(
-            "Template dimensions",
-            value="",
-            placeholder="10.5x9.5in or 27x24cm",
-            help="Leave blank to use the QR fallback when available.",
+        use_qr = st.checkbox(
+            "Variable dimensions, read QR code",
+            key=QR_MODE_KEY,
+            on_change=_qr_mode_changed,
+            help="Each image carries its own template QR code. Leave unticked to "
+                 "measure every image against one manually entered sheet size.",
+            persist_state="page",
         )
+
+        st.text_input(
+            "Template dimensions",
+            key=DIMENSIONS_TEXT_KEY,
+            disabled=use_qr,
+            help=(
+                'Exact format: "<width>x<height><unit>" — e.g. "10.5x9.5in" or '
+                '"27x24cm". Only "in" or "cm" are accepted. Type a size directly '
+                "here for a custom template that doesn't land on the Width/Height "
+                "selectors' 0.5 grid below."
+            ),
+        )
+
+        measure_unit = st.session_state[UNIT_KEY]
+        st.segmented_control(
+            "Unit",
+            options=["in", "cm"],
+            format_func={"in": "Inches", "cm": "Centimeters"}.get,
+            required=True,
+            key=UNIT_KEY,
+            on_change=_convert_measure_unit,
+            disabled=use_qr,
+            persist_state="page",
+        )
+
+        measure_minimum = minimum_template_edge(measure_unit)
+        measure_maximum = maximum_template_edge(measure_unit)
+        with st.container(horizontal=True):
+            st.number_input(
+                "Width",
+                min_value=measure_minimum,
+                max_value=measure_maximum,
+                step=0.5,
+                format="%.1f",
+                key=WIDTH_KEY,
+                disabled=use_qr,
+                icon=":material/width:",
+                help="Horizontal size of the printed sheet, snapped to the nearest 0.5.",
+                on_change=_measure_dimensions_changed,
+                persist_state="page",
+            )
+            st.number_input(
+                "Height",
+                min_value=measure_minimum,
+                max_value=measure_maximum,
+                step=0.5,
+                format="%.1f",
+                key=HEIGHT_KEY,
+                disabled=use_qr,
+                icon=":material/height:",
+                help="Vertical size of the printed sheet, snapped to the nearest 0.5.",
+                on_change=_measure_dimensions_changed,
+                persist_state="page",
+            )
         segmentation_label = st.selectbox(
             "Segmentation method",
             ["Classic thresholding (Otsu)", "BiRefNet"],
+            key="segmentation_method",
+            persist_state="session",
         )
         mask_method = "threshold" if segmentation_label == "Classic thresholding (Otsu)" else "birefnet"
 
@@ -301,96 +464,21 @@ def main():
             help="Per-image failure/warning report used by the failure-taxonomy analysis.",
         )
 
-        st.header("Bulk Processing")
-        if input_source == "Local folder":
-            candidate_images = collect_folder_images(input_dir)
-        else:
-            candidate_images = [
-                f.name for f in uploaded_files
-                if Path(f.name).suffix.lower() in VALID_EXTENSIONS
-            ]
-        default_workers, worker_reason = lm.default_worker_count(
-            candidate_images if input_source == "Local folder" else [],
-            "masks",
-            mask_method,
-        )
-        available_workers = lm.available_cpu_workers()
-        worker_capacity = min(available_workers, max(1, len(candidate_images)))
-        risk_at_one_worker = lm.worker_risk_report(1, available_workers)
-        safe_worker_max = min(worker_capacity, risk_at_one_worker.normal_limit)
-        break_glass_key = "break_glass_available_workers"
-        if st.session_state.get(break_glass_key) != available_workers:
-            st.session_state.pop(break_glass_key, None)
-        break_glass_unlocked = st.session_state.get(break_glass_key) == available_workers
-        max_workers = worker_capacity if break_glass_unlocked else safe_worker_max
-        default_workers = min(max_workers, max(1, int(default_workers)))
-        worker_key = "batch_worker_count"
-        if worker_key not in st.session_state:
-            st.session_state[worker_key] = default_workers
-        elif st.session_state[worker_key] > max_workers:
-            st.session_state[worker_key] = max_workers
-
-        workers = int(st.number_input(
-            "Workers",
-            min_value=1,
-            max_value=max_workers,
-            step=1,
-            key=worker_key,
-            help=(
-                f"{available_workers} CPU worker(s) are available to this app. "
-                f"Default: {worker_reason}. Choosing more than one worker runs "
-                "RF-DETR and BiRefNet on CPU for this run."
-            ),
-        ))
-        worker_risk = lm.worker_risk_report(workers, available_workers)
-        st.badge(
-            f"{worker_risk.label} · {workers}/{available_workers} workers · "
-            f"{worker_risk.utilization:.0%}",
-            icon=(
-                ":material/check_circle:" if worker_risk.level == "low"
-                else ":material/warning:"
-            ),
-            color=worker_risk.color,
-            width="stretch",
-            help=(
-                "Green: 25% or less. Yellow: 26–50%. Red: 51–75%. "
-                "Counts above 75% require a one-run break-glass acknowledgement."
-            ),
-        )
-        if worker_risk.requires_break_glass:
-            st.error(
-                "Break-glass mode is active. This worker count may make the computer "
-                "unresponsive or crash; save work before running."
-            )
-        elif worker_capacity > safe_worker_max and not break_glass_unlocked:
-            if st.button(
-                "Unlock high-risk worker counts",
-                icon=":material/warning:",
-                width="stretch",
-            ):
-                confirm_high_risk_workers(available_workers)
-        elif break_glass_unlocked:
-            st.caption("Break-glass unlock is valid for one high-risk run.")
-
-        execution_device = "cpu" if workers > 1 else "auto"
-        if execution_device == "cpu":
-            st.warning(
-                f"Parallel CPU mode: {workers} workers selected. CUDA/MPS is disabled "
-                "for RF-DETR and BiRefNet during this run."
-            )
-        else:
-            st.caption("Single-worker mode: CUDA/MPS will be used when available.")
+    if st.session_state.get(QR_NOTICE_KEY) and not lm._enhanced_qr_available():
+        warn_enhanced_qr_missing()
 
     threshold_value = lm.THRESHOLD_LEVELS[threshold_level] if mask_method == "threshold" else lm.BIREFNET_THRESHOLD
     output_path = Path(output_dir).expanduser()
     results_path = output_path / "leaf_morpho_results.csv"
 
-    template_dimensions = None
     template_error = None
-    if template_dimensions_text.strip():
-        template_dimensions = lm.parse_template_dimensions(template_dimensions_text.strip())
+    if use_qr:
+        template_dimensions = None
+    else:
+        dimensions_text = st.session_state[DIMENSIONS_TEXT_KEY].strip()
+        template_dimensions = lm.parse_template_dimensions(dimensions_text)
         if template_dimensions is None:
-            template_error = "Template dimensions must look like 10.5x9.5in or 27x24cm."
+            template_error = 'Template dimensions must look like "10.5x9.5in" or "27x24cm".'
 
     st.subheader("Preflight")
     checks = []
@@ -414,7 +502,7 @@ def main():
     device_report = birefnet_device_report()
     if worker_risk.requires_break_glass:
         checks.append((
-            "Worker safety", "error", not break_glass_unlocked,
+            "Worker safety", "error", not break_glass_is_unlocked,
             (
                 f"Critical load: {workers}/{available_workers} workers "
                 f"({worker_risk.utilization:.0%}). Break-glass acknowledgement "
@@ -427,23 +515,47 @@ def main():
             f"{worker_risk.label}: {workers}/{available_workers} workers "
             f"({worker_risk.utilization:.0%}).", None,
         ))
-    if execution_device == "cpu":
+    if execution_device == "hybrid":
+        checks.append((
+            "Execution mode", "success", False,
+            f"Hybrid mode: RF-DETR on GPU with Otsu and measurements across {workers} CPU workers.", None,
+        ))
+    elif execution_device == "cpu":
         checks.append((
             "Execution mode", "warning", False,
-            f"Parallel CPU mode with {workers} workers; CUDA/MPS disabled for this run.", None,
+            f"CPU mode with {workers} worker(s); CUDA/MPS is disabled for this run.", None,
         ))
     else:
         checks.append((
             "Execution mode", "success", False,
-            "Single worker; accelerator selection is automatic.", None,
+            "Serial GPU inference; accelerator selection is automatic.", None,
+        ))
+    if mask_method == "birefnet" and execution_device == "cpu":
+        birefnet_cpu_detail = (
+            "GPU is available but disabled by an advanced CPU-only override."
+            if compute_settings.accelerator_available
+            else "No usable CUDA or Apple MPS accelerator was detected."
+        )
+        checks.append((
+            "BiRefNet performance", "warning", False,
+            f"BiRefNet is using CPU. {birefnet_cpu_detail}", None,
         ))
     checks.append((
         "BiRefNet compute", device_report.severity,
         mask_method == "birefnet" and device_report.severity == "error",
         device_report.detail, None,
     ))
-    checks.append(("Template dimensions", "success" if template_error is None else "error", template_error is not None,
-                   template_error or "OK", None))
+    if use_qr:
+        template_level = "success" if lm._enhanced_qr_available() else "warning"
+        template_detail = "Variable — read from each image's QR code"
+        if template_level == "warning":
+            template_detail += ' (OpenCV only; install "mats-morpho[qr]" for tougher codes)'
+        template_blocking = False
+    elif template_error is not None:
+        template_level, template_detail, template_blocking = "error", template_error, True
+    else:
+        template_level, template_detail, template_blocking = "success", f"Manual: {dimensions_text}", False
+    checks.append(("Template dimensions", template_level, template_blocking, template_detail, None))
 
     if input_source == "Local folder":
         image_paths = collect_folder_images(input_dir)
@@ -491,10 +603,15 @@ def main():
         output_path.mkdir(parents=True, exist_ok=True)
         run_sample_ids = []
         succeeded_so_far = 0
-        break_glass_acknowledged = break_glass_unlocked
+        break_glass_acknowledged = break_glass_is_unlocked
+        birefnet_parallel_acknowledged = birefnet_parallel_is_unlocked
         if worker_risk.requires_break_glass:
             # An acknowledgement authorizes one high-risk run only.
             st.session_state.pop("break_glass_available_workers", None)
+        if mask_method == "birefnet" and execution_device == "cpu" and workers > 1:
+            # CPU-parallel BiRefNet needs its own acknowledgement even at a
+            # non-critical CPU count.
+            st.session_state.pop("birefnet_parallel_available_workers", None)
 
         with tempfile.TemporaryDirectory(prefix="leaf_morpho_uploads_") as tmpdir:
             if input_source == "Upload images":
@@ -537,6 +654,7 @@ def main():
                         execution_device=execution_device,
                         worker_safety_check=True,
                         break_glass_acknowledged=break_glass_acknowledged,
+                        birefnet_parallel_acknowledged=birefnet_parallel_acknowledged,
                         progress_callback=update_progress,
                         write_failures=write_failures,
                         compact_csv=compact_csv,
@@ -585,7 +703,10 @@ def render_results(lm):
         f"Done. {run['succeeded']} succeeded, {run['failed']} failed "
         f"(of {run['total']}). Results written to `{results_path}`."
     )
-    device_label = "CPU only" if run["execution_device"] == "cpu" else "automatic accelerator selection"
+    device_label = {
+        "cpu": "CPU only",
+        "hybrid": "GPU RF-DETR + CPU Otsu fan-out",
+    }.get(run["execution_device"], "automatic accelerator selection")
     st.caption(
         f"Workers used: {run['workers']} ({run['worker_reason']}); compute: {device_label}."
     )

@@ -1,7 +1,16 @@
 """Worker/device-policy behavior without loading inference models."""
 
+import concurrent.futures
+import threading
+import time
+from types import SimpleNamespace
+
 import pytest
 
+# mats.core imports torch/numpy/cv2/rfdetr at module level even though this
+# file never runs inference -- skip cleanly on the dependency-light CI matrix
+# (`pip install --no-deps -e .`), same idiom as the streamlit-gated app tests.
+pytest.importorskip("numpy")
 from mats import core
 
 
@@ -54,6 +63,67 @@ def test_auto_device_policy_keeps_model_backed_runs_serialized(monkeypatch, tmp_
     assert result["workers"] == 1
     assert result["execution_device"] == "auto"
     assert seen_devices == ["auto", "auto"]
+
+
+def test_hybrid_otsu_policy_keeps_gpu_rfdetr_and_cpu_fanout(monkeypatch, tmp_path):
+    seen_devices = []
+
+    def fake_process(*args):
+        seen_devices.append(args[-1])
+        return _result_for(args[0])
+
+    monkeypatch.setattr(core, "_process_batch_image", fake_process)
+    result = core.run_leaf_morpho_batch(
+        ["one.jpg", "two.jpg"],
+        str(tmp_path),
+        str(tmp_path / "results.csv"),
+        workers=2,
+        execution_device="hybrid",
+        mask_method="threshold",
+    )
+
+    assert result["workers"] == 2
+    assert result["execution_device"] == "hybrid"
+    assert set(seen_devices) == {"hybrid"}
+
+
+def test_hybrid_policy_rejects_birefnet(tmp_path):
+    with pytest.raises(ValueError, match="Otsu thresholding only"):
+        core.run_leaf_morpho_batch(
+            ["one.jpg"],
+            str(tmp_path),
+            str(tmp_path / "results.csv"),
+            workers=2,
+            execution_device="hybrid",
+            mask_method="birefnet",
+        )
+
+
+def test_gpu_marker_inference_uses_one_shared_lane(monkeypatch):
+    active = 0
+    peak_active = 0
+    active_lock = threading.Lock()
+
+    class FakeModel:
+        def predict(self, _image, threshold):
+            nonlocal active, peak_active
+            assert threshold == core.RF_DETR_MARKER_CONFIDENCE
+            with active_lock:
+                active += 1
+                peak_active = max(peak_active, active)
+            time.sleep(0.02)
+            with active_lock:
+                active -= 1
+            return SimpleNamespace(xyxy=[])
+
+    monkeypatch.setattr(core, "resolve_rfdetr_device", lambda _override=None: "cuda")
+    monkeypatch.setattr(core, "get_marker_model", lambda _override=None: FakeModel())
+    image = core.np.zeros((10, 10, 3), dtype=core.np.uint8)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(core.detect_marker_geometry, [image, image]))
+
+    assert peak_active == 1
 
 
 def test_cpu_override_wins_over_accelerator_environment(monkeypatch):
@@ -112,3 +182,36 @@ def test_worker_safety_check_allows_acknowledged_high_risk_count(monkeypatch, tm
 
     assert result["workers"] == 7
     assert set(seen_devices) == {"cpu"}
+
+
+def test_worker_safety_check_requires_birefnet_parallel_acknowledgement(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "available_cpu_workers", lambda: 8)
+
+    with pytest.raises(ValueError, match="CPU-parallel BiRefNet"):
+        core.run_leaf_morpho_batch(
+            ["one.jpg", "two.jpg"],
+            str(tmp_path),
+            str(tmp_path / "results.csv"),
+            workers=2,
+            execution_device="cpu",
+            mask_method="birefnet",
+            worker_safety_check=True,
+        )
+
+
+def test_worker_safety_check_allows_acknowledged_birefnet_parallelism(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "available_cpu_workers", lambda: 8)
+    monkeypatch.setattr(core, "_process_batch_image", lambda *args: _result_for(args[0]))
+
+    result = core.run_leaf_morpho_batch(
+        ["one.jpg", "two.jpg"],
+        str(tmp_path),
+        str(tmp_path / "results.csv"),
+        workers=2,
+        execution_device="cpu",
+        mask_method="birefnet",
+        worker_safety_check=True,
+        birefnet_parallel_acknowledged=True,
+    )
+
+    assert result["workers"] == 2

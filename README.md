@@ -72,8 +72,9 @@ mats app
 This opens the Streamlit GUI in your browser. From there:
 
 1. **Pick images** — a local folder, or drag-and-drop uploads.
-2. **Set the scale** — type the observation-box size (e.g. `10.5x9.5in`) or
-   leave it blank to read it from the template's QR code automatically.
+2. **Set the scale** — enter the printed sheet's width, height, and unit (e.g.
+   `10.5 x 9.5 in`), or tick **Variable dimensions, read QR code** to read it
+   from each image's template QR code automatically.
 3. **Choose segmentation** — Otsu threshold (fast, default) or BiRefNet (accurate).
 4. **Choose workers** — the app detects the CPUs assigned to it. One worker uses
    CUDA/MPS when available; two or more workers use parallel CPU processing and

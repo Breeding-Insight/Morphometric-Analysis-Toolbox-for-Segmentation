@@ -17,8 +17,11 @@ hardware diagnostics).
    Accepted: `.jpg .jpeg .png .tif .tiff .bmp`.
 2. **Output folder.** Where masks and target boxes are written (defaults to
    `~/mats_outputs`).
-3. **Template dimensions.** Enter the observation-box size, e.g. `10.5x9.5in` or
-   `27x24cm`. Leave blank to read it from the template's QR code.
+3. **Template dimensions.** Enter the printed sheet's **width** and **height**
+   and choose **in** or **cm** (defaults to 12x12 in). Tick **Variable
+   dimensions, read QR code** to read each image's size from its own template
+   QR code instead — installing the optional `mats-morpho[qr]` extra makes that
+   QR reading more robust against glare, skew, or blur.
 4. **Segmentation method.** *Classic thresholding (Otsu)* (fast, default; best
    on clean backgrounds) or *BiRefNet* (more accurate on cluttered backgrounds;
    uses a GPU when available; needs the ~2.65 GB checkpoint).
@@ -48,8 +51,10 @@ the browser tab open until they finish.
 - **BiRefNet checkpoint (yellow)** — open **BiRefNet setup** in the sidebar to
   install it, or pre-stage it with `MATS_WEIGHTS_DIR` / `BIREFNET_CHECKPOINT`.
   CPU-only BiRefNet is also yellow but remains supported.
-- **Template dimensions (red)** — the text must look like `10.5x9.5in` or
-  `27x24cm`.
+- **Template dimensions (yellow)** — only shown in **Variable dimensions** (QR)
+  mode when the optional enhanced QR extra isn't installed; OpenCV-only
+  decoding may miss glare/skew/blur codes. Install `mats-morpho[qr]` or switch
+  to manual width/height entry.
 - **Input images (red)** — the folder has no supported image files.
 
 ## Template Creator
