@@ -78,10 +78,11 @@ This opens the Streamlit GUI in your browser. From there:
 4. **Run**, then preview results and download a CSV or a ZIP of masks + boxes.
 
 **Printing templates.** The app has a **Template Creator** page (in the sidebar)
-that generates a print-ready PDF at any canvas/box size, with correctly colored
-corner markers and a QR code encoding the box dimensions. Print it at 100%
-scale (no "fit to page"), lay your leaves inside the box, and photograph it flat.
-See [docs/templates.md](docs/templates.md).
+that accepts only the finished sheet's width and length, then automatically
+sizes the observation area and corner markers. Download the print-ready PDF or
+an editable Adobe InDesign IDML; the PDF is recommended for final printing.
+Print at 100% scale (no "fit to page"), lay your leaves inside the box, and
+photograph it flat. See [docs/templates.md](docs/templates.md).
 
 ---
 

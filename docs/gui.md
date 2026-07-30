@@ -45,4 +45,7 @@ the browser tab open until they finish.
 ## Template Creator
 
 See [templates.md](templates.md). It generates a print-ready PDF template at any
-size, with the correct marker color and a QR code the pipeline can read back.
+supported width and length, with the correct marker color and a QR code the
+pipeline can read back. Marker size and the calibrated observation area are
+calculated automatically. An editable Adobe InDesign IDML is also available,
+while PDF remains the recommended print format.

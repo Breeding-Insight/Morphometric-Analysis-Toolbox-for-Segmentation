@@ -136,7 +136,7 @@ def collect_output_pairs(output_dir):
 
 
 def main():
-    mark_icon = ASSETS_DIR / "mats_mark.svg"
+    mark_icon = ASSETS_DIR / "mats_mark_circles_color.svg"
     st.set_page_config(
         page_title="Morphometric Analysis Tools (MATs)",
         page_icon=str(mark_icon) if mark_icon.is_file() else "🌿",
@@ -144,10 +144,11 @@ def main():
     )
 
     # Brand mark in the app/sidebar header (full lockup + collapsed-state icon).
-    logo_wide = ASSETS_DIR / "mats_logo_horizontal.svg"
+    logo_wide = ASSETS_DIR / "mats_logo_horizontal_circles_color.svg"
     if logo_wide.is_file():
         st.logo(
             str(logo_wide),
+            size="large",
             icon_image=str(mark_icon) if mark_icon.is_file() else None,
         )
 
