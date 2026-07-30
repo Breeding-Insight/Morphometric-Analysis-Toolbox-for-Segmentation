@@ -1,7 +1,9 @@
-# Model weights (see docs/weights.md). RF-DETR (weights/rf_detr_marker.pth) is
-# the one intentional exception: it's committed via Git LFS as an interim
-# delivery mechanism (mandatory for both segmentation paths, and Hugging Face
-# auto-fetch isn't wired up yet). BiRefNet is not committed -- too large.
+# Model weights (see docs/weights.md). Both checkpoints are committed via Git
+# LFS -- RF-DETR (weights/rf_detr_marker.pth, mandatory, fetched on every
+# clone) and BiRefNet (weights/birefnet_leaf.pth, optional, excluded from the
+# default clone/fetch by .lfsconfig so it's opt-in). Git LFS runs alongside
+# Hugging Face auto-fetch as a second delivery channel for collaborators (e.g.
+# USDA) who cannot reach huggingface.co.
 # `weights/*` + a negation, not a bare `weights/`, because gitignore can't
 # re-include a file whose parent directory is itself excluded.
 *.pth
@@ -10,6 +12,7 @@
 *.onnx
 weights/*
 !weights/rf_detr_marker.pth
+!weights/birefnet_leaf.pth
 
 # Pipeline run outputs
 mats_outputs/

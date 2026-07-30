@@ -75,7 +75,11 @@ This opens the Streamlit GUI in your browser. From there:
 2. **Set the scale** — type the observation-box size (e.g. `10.5x9.5in`) or
    leave it blank to read it from the template's QR code automatically.
 3. **Choose segmentation** — Otsu threshold (fast, default) or BiRefNet (accurate).
-4. **Run**, then preview results and download a CSV or a ZIP of masks + boxes.
+4. **Choose workers** — the app detects the CPUs assigned to it. One worker uses
+   CUDA/MPS when available; two or more workers use parallel CPU processing and
+   disable CUDA/MPS for that run. A colored warning light shows CPU allocation;
+   counts above 75% require a one-run break-glass acknowledgement.
+5. **Run**, then preview results and download a CSV or a ZIP of masks + boxes.
 
 **Printing templates.** The app has a **Template Creator** page (in the sidebar)
 that accepts only the finished sheet's width and length, then automatically

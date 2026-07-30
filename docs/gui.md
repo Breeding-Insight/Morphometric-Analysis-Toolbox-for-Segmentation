@@ -6,9 +6,10 @@ Launch the GUI:
 mats app
 ```
 
-Streamlit opens in your browser (default http://localhost:8501). The app has two
-pages, chosen from the sidebar: **Home** (measuring) and **Template Creator**
-(making printable templates).
+Streamlit opens in your browser (default http://localhost:8501). The app has
+three pages, chosen from the sidebar: **Home** (measuring), **Template Creator**
+(making printable templates), and **BiRefNet setup** (optional model install and
+hardware diagnostics).
 
 ## Home — measuring leaves
 
@@ -24,9 +25,17 @@ pages, chosen from the sidebar: **Home** (measuring) and **Template Creator**
 5. **Output options.** Pick the **Full research schema** CSV to match the
    analysis scripts, or **Compact** for a trimmed export. Optionally write a
    failures log.
-6. **Preflight** shows green/red checks for weights, template dimensions, and
-   input images. When all pass, click **Run Leaf Morphometrics**.
-7. After the run: preview matched target-box / mask pairs, view and download the
+6. **Workers.** The app detects the CPU workers assigned to it (including HPC
+   scheduler limits). One worker uses CUDA/MPS when available. Selecting two or
+   more workers enables parallel CPU processing and disables CUDA/MPS for that
+   run, including RF-DETR and BiRefNet inference. A warning light is green at
+   25% or less of the CPU allocation, yellow through 50%, and red through 75%.
+   Counts above 75% require a one-run **Break the glass** acknowledgement.
+7. **Preflight** shows green, yellow, and red checks for weights, BiRefNet
+   compute availability, template dimensions, and input images. A missing
+   optional BiRefNet checkpoint is yellow and links to **BiRefNet setup**;
+   it only blocks a run when BiRefNet segmentation is selected.
+8. After the run: preview matched target-box / mask pairs, view and download the
    measurements CSV, or build a ZIP of all outputs.
 
 Large batches (>200 images) ask for confirmation and run synchronously — keep
@@ -36,8 +45,9 @@ the browser tab open until they finish.
 
 - **RF-DETR checkpoint (red)** — run `mats fetch-weights`, or set
   `MATS_WEIGHTS_DIR`. See [weights.md](weights.md).
-- **BiRefNet checkpoint (red, only checked when BiRefNet segmentation is
-  selected)** — run `mats fetch-weights --only birefnet` (or `--all`).
+- **BiRefNet checkpoint (yellow)** — open **BiRefNet setup** in the sidebar to
+  install it, or pre-stage it with `MATS_WEIGHTS_DIR` / `BIREFNET_CHECKPOINT`.
+  CPU-only BiRefNet is also yellow but remains supported.
 - **Template dimensions (red)** — the text must look like `10.5x9.5in` or
   `27x24cm`.
 - **Input images (red)** — the folder has no supported image files.

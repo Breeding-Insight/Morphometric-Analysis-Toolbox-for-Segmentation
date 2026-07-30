@@ -1,0 +1,20 @@
+# Git LFS settings that apply to everyone who clones this repo (see docs/weights.md).
+#
+# weights/birefnet_leaf.pth (~2.65 GB) IS committed via Git LFS -- collaborators
+# on networks that block huggingface.co (USDA among them) need a delivery channel
+# that isn't the Hugging Face Hub. But nobody should pay 2.65 GB on a plain
+# `git clone`, so it's excluded from the default fetch: the checkout gets a
+# 134-byte LFS pointer stub instead of the weight bytes.
+#
+# git-lfs reads this file from the index (or HEAD) when it isn't yet in the
+# working tree, so the exclusion applies during the initial clone too.
+#
+# Opt in via the "BiRefNet setup" page in the MATS app, `mats fetch-weights
+# --only birefnet --source lfs`, or by hand:
+#
+#     git lfs pull --include="weights/birefnet_leaf.pth"
+#
+# Note that a bare `git lfs pull` will NOT fetch it -- only -I/--include
+# overrides fetchexclude. That's deliberate: no accidental 2.65 GB pulls.
+[lfs]
+	fetchexclude = weights/birefnet_leaf.pth

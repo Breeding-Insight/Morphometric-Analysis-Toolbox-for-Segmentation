@@ -7,9 +7,10 @@ from pathlib import Path
 
 import streamlit as st
 
+from mats.app import branding
+
 
 APP_DIR = Path(__file__).resolve().parent
-ASSETS_DIR = APP_DIR / "assets"
 # The app ships inside the installed package, so default the folder pickers to
 # the user's home rather than the (possibly read-only) install directory.
 DEFAULT_INPUT_DIR = Path.home()
@@ -120,44 +121,100 @@ def count_csv_rows(results_path):
         return sum(1 for _ in csv.DictReader(csvfile))
 
 
-def collect_output_pairs(output_dir):
-    """Match each mask to its target box by sample_id, sorted by sample_id."""
+def collect_output_pairs(output_dir, sample_ids):
+    """Return output pairs for the explicitly supplied sample IDs only."""
     output_dir = Path(output_dir)
     pairs = []
-    for mask_path in sorted(output_dir.glob("*_mask.png")):
-        sample_id = mask_path.name[: -len("_mask.png")]
+    for sample_id in sorted(set(sample_ids)):
+        mask_path = output_dir / f"{sample_id}_mask.png"
+        if not mask_path.is_file():
+            continue
         target_box = output_dir / f"{sample_id}_target_box.jpg"
         pairs.append({
             "sample_id": sample_id,
-            "target_box": target_box if target_box.is_file() else None,
-            "mask": mask_path,
+            "target_box": str(target_box) if target_box.is_file() else None,
+            "mask": str(mask_path),
         })
     return pairs
 
 
+def merge_viewer_pairs(existing_pairs, new_pairs):
+    """Accumulate viewer artifacts within a session without duplicating paths."""
+    merged = list(existing_pairs)
+    indexes_by_mask = {
+        pair["mask"]: index
+        for index, pair in enumerate(merged)
+    }
+    for pair in new_pairs:
+        existing_index = indexes_by_mask.get(pair["mask"])
+        if existing_index is None:
+            indexes_by_mask[pair["mask"]] = len(merged)
+            merged.append(pair)
+        else:
+            merged[existing_index] = pair
+    return merged
+
+
+@st.dialog(
+    "Break glass: high-risk CPU allocation",
+    width="medium",
+    icon=":material/warning:",
+    dismissible=False,
+)
+def confirm_high_risk_workers(available_workers):
+    """Require an explicit, single-run acknowledgement for >75% CPU use."""
+    dialog_nonce = st.session_state.get("break_glass_dialog_nonce", 0)
+    st.error(
+        f"You are unlocking up to {available_workers} workers. This can use more than "
+        "75% of the CPU allocation and may freeze or crash the computer."
+    )
+    st.markdown(
+        "- Save important work and close unnecessary applications first.\n"
+        "- Model-backed runs can consume substantial memory and increase heat/fan activity.\n"
+        "- Other users of this shared server may be affected.\n"
+        "- CUDA/MPS remains disabled whenever more than one worker is selected."
+    )
+    saved_work = st.checkbox(
+        "I have saved important work and closed unnecessary applications.",
+        key=f"break_glass_saved_work_{dialog_nonce}",
+    )
+    understands_risk = st.checkbox(
+        "I understand this run may freeze or crash the computer.",
+        key=f"break_glass_understands_risk_{dialog_nonce}",
+    )
+    if st.button("Keep the safe worker limit", width="stretch"):
+        st.session_state["break_glass_dialog_nonce"] = dialog_nonce + 1
+        st.rerun()
+    if st.button(
+        "Break the glass for one run",
+        type="primary",
+        icon=":material/warning:",
+        width="stretch",
+        disabled=not (saved_work and understands_risk),
+    ):
+        st.session_state["break_glass_available_workers"] = available_workers
+        st.session_state["break_glass_dialog_nonce"] = dialog_nonce + 1
+        st.rerun()
+
+
 def main():
-    mark_icon = ASSETS_DIR / "mats_mark_circles_color.svg"
     st.set_page_config(
-        page_title="Morphometric Analysis Tools (MATs)",
-        page_icon=str(mark_icon) if mark_icon.is_file() else "🌿",
+        page_title="MATS — Morphometric Analysis Toolbox for Segmentation",
+        page_icon=branding.page_icon(),
         layout="wide",
     )
+    branding.apply_logo()
+    # The viewer is session-scoped. Unlike the selected output directory, this
+    # manifest is discarded when the browser session closes and is never rebuilt
+    # by scanning artifacts left by earlier sessions.
+    st.session_state.setdefault("viewer_pairs", [])
 
-    # Brand mark in the app/sidebar header (full lockup + collapsed-state icon).
-    logo_wide = ASSETS_DIR / "mats_logo_horizontal_circles_color.svg"
-    if logo_wide.is_file():
-        st.logo(
-            str(logo_wide),
-            size="large",
-            icon_image=str(mark_icon) if mark_icon.is_file() else None,
-        )
-
-    st.title("Morphometric Analysis Tools (MATs)")
+    st.title("Morphometric Analysis Toolbox for Segmentation")
     st.caption("RF-DETR marker detection with Otsu threshold or BiRefNet segmentation.")
 
     with st.expander("Usage and setup"):
         st.markdown(
-            "- **Launch**: `mats app` (from an environment where MATs is installed).\n"
+            "- **Launch**: `mats app` (from an environment where MATS is installed).\n"
             "- **Checkpoints**: `mats fetch-weights` fetches RF-DETR (mandatory) by default; "
             "add `--only birefnet` or `--all` to also fetch BiRefNet. Files land in "
             "`~/.cache/mats/weights`; override the location with `MATS_WEIGHTS_DIR`, "
@@ -173,17 +230,17 @@ def main():
         lm = load_pipeline_module()
     except ModuleNotFoundError as exc:
         missing = exc.name or str(exc)
-        st.error(f"Failed to import the MATs pipeline: missing dependency `{missing}`.")
+        st.error(f"Failed to import the MATS pipeline: missing dependency `{missing}`.")
         st.info(
             "The Python environment running Streamlit is missing a pipeline "
-            f"dependency (`{missing}`). Install MATs with its dependencies "
+            f"dependency (`{missing}`). Install MATS with its dependencies "
             "(rfdetr, transformers, torch, opencv) and relaunch:\n\n"
             "```\npip install -e .\nmats app\n```"
         )
         st.caption(f"Current interpreter: {sys.executable}")
         st.stop()
     except Exception as exc:
-        st.error(f"Failed to import the MATs pipeline: {exc}")
+        st.error(f"Failed to import the MATS pipeline: {exc}")
         with st.expander("Traceback"):
             st.code(traceback.format_exc())
         st.caption(f"Current interpreter: {sys.executable}")
@@ -233,7 +290,7 @@ def main():
             "Results CSV schema",
             ["Full research schema (*_meanscale)", "Compact (sample_id, area, height, length)"],
             help=(
-                "Full matches the columns the downstream MATs analysis scripts expect. "
+                "Full matches the columns the downstream MATS analysis scripts expect. "
                 "Compact is the trimmed UI export."
             ),
         )
@@ -252,39 +309,77 @@ def main():
                 f.name for f in uploaded_files
                 if Path(f.name).suffix.lower() in VALID_EXTENSIONS
             ]
-        all_target_boxes = bool(candidate_images) and all(
-            lm.is_target_box_image(p) for p in candidate_images
-        )
-        # Model-backed runs use process-global singletons, so the pipeline serializes
-        # them to a single worker regardless of this value. Parallelism only helps the
-        # CPU-only Otsu path over pre-computed target boxes.
-        can_parallelize = all_target_boxes and mask_method == "threshold"
         default_workers, worker_reason = lm.default_worker_count(
             candidate_images if input_source == "Local folder" else [],
             "masks",
             mask_method,
         )
-        if can_parallelize:
-            workers = st.number_input(
-                "Workers",
-                min_value=1,
-                max_value=32,
-                value=max(1, int(default_workers)),
-                step=1,
-                help=f"Default reason: {worker_reason}",
+        available_workers = lm.available_cpu_workers()
+        worker_capacity = min(available_workers, max(1, len(candidate_images)))
+        risk_at_one_worker = lm.worker_risk_report(1, available_workers)
+        safe_worker_max = min(worker_capacity, risk_at_one_worker.normal_limit)
+        break_glass_key = "break_glass_available_workers"
+        if st.session_state.get(break_glass_key) != available_workers:
+            st.session_state.pop(break_glass_key, None)
+        break_glass_unlocked = st.session_state.get(break_glass_key) == available_workers
+        max_workers = worker_capacity if break_glass_unlocked else safe_worker_max
+        default_workers = min(max_workers, max(1, int(default_workers)))
+        worker_key = "batch_worker_count"
+        if worker_key not in st.session_state:
+            st.session_state[worker_key] = default_workers
+        elif st.session_state[worker_key] > max_workers:
+            st.session_state[worker_key] = max_workers
+
+        workers = int(st.number_input(
+            "Workers",
+            min_value=1,
+            max_value=max_workers,
+            step=1,
+            key=worker_key,
+            help=(
+                f"{available_workers} CPU worker(s) are available to this app. "
+                f"Default: {worker_reason}. Choosing more than one worker runs "
+                "RF-DETR and BiRefNet on CPU for this run."
+            ),
+        ))
+        worker_risk = lm.worker_risk_report(workers, available_workers)
+        st.badge(
+            f"{worker_risk.label} · {workers}/{available_workers} workers · "
+            f"{worker_risk.utilization:.0%}",
+            icon=(
+                ":material/check_circle:" if worker_risk.level == "low"
+                else ":material/warning:"
+            ),
+            color=worker_risk.color,
+            width="stretch",
+            help=(
+                "Green: 25% or less. Yellow: 26–50%. Red: 51–75%. "
+                "Counts above 75% require a one-run break-glass acknowledgement."
+            ),
+        )
+        if worker_risk.requires_break_glass:
+            st.error(
+                "Break-glass mode is active. This worker count may make the computer "
+                "unresponsive or crash; save work before running."
+            )
+        elif worker_capacity > safe_worker_max and not break_glass_unlocked:
+            if st.button(
+                "Unlock high-risk worker counts",
+                icon=":material/warning:",
+                width="stretch",
+            ):
+                confirm_high_risk_workers(available_workers)
+        elif break_glass_unlocked:
+            st.caption("Break-glass unlock is valid for one high-risk run.")
+
+        execution_device = "cpu" if workers > 1 else "auto"
+        if execution_device == "cpu":
+            st.warning(
+                f"Parallel CPU mode: {workers} workers selected. CUDA/MPS is disabled "
+                "for RF-DETR and BiRefNet during this run."
             )
         else:
-            workers = 1
-            st.number_input(
-                "Workers",
-                min_value=1,
-                max_value=32,
-                value=1,
-                step=1,
-                disabled=True,
-                help="Model-backed runs (RF-DETR / BiRefNet) always run on a single worker.",
-            )
-            st.caption("Serialized to 1 worker for model-backed inference.")
+            st.caption("Single-worker mode: CUDA/MPS will be used when available.")
 
     threshold_value = lm.THRESHOLD_LEVELS[threshold_level] if mask_method == "threshold" else lm.BIREFNET_THRESHOLD
     output_path = Path(output_dir).expanduser()
@@ -299,30 +394,81 @@ def main():
 
     st.subheader("Preflight")
     checks = []
-    checks.append(("Pipeline library", True, f"mats.core ({Path(lm.__file__).parent})"))
-    checks.append(("RF-DETR checkpoint", lm.RF_DETR_MARKER_CHECKPOINT.is_file(), str(lm.RF_DETR_MARKER_CHECKPOINT)))
-    if mask_method == "birefnet":
-        checks.append(("BiRefNet checkpoint", lm.BIREFNET_CHECKPOINT.is_file(), str(lm.BIREFNET_CHECKPOINT)))
-    checks.append(("Template dimensions", template_error is None, template_error or "OK"))
+    checks.append(("Pipeline library", "success", False, f"mats.core ({Path(lm.__file__).parent})", None))
+
+    from mats import weights
+    from mats.devices import birefnet_device_report
+
+    rfdetr_status = weights.get_weight_status("rf-detr")
+    rfdetr_level = "success" if rfdetr_status.state == "ready" else "error"
+    checks.append(("RF-DETR checkpoint", rfdetr_level, rfdetr_level == "error", rfdetr_status.detail, None))
+
+    birefnet_status = weights.get_weight_status("birefnet")
+    birefnet_level = "success" if birefnet_status.state == "ready" else "warning"
+    checks.append((
+        "BiRefNet checkpoint", birefnet_level, mask_method == "birefnet" and birefnet_status.state != "ready",
+        birefnet_status.detail if birefnet_status.state != "ready" else f"Installed at {birefnet_status.path}",
+        "pages/2_BiRefNet_Setup.py" if birefnet_status.state != "ready" else None,
+    ))
+
+    device_report = birefnet_device_report()
+    if worker_risk.requires_break_glass:
+        checks.append((
+            "Worker safety", "error", not break_glass_unlocked,
+            (
+                f"Critical load: {workers}/{available_workers} workers "
+                f"({worker_risk.utilization:.0%}). Break-glass acknowledgement "
+                "is required for this run."
+            ), None,
+        ))
+    else:
+        checks.append((
+            "Worker safety", "success", False,
+            f"{worker_risk.label}: {workers}/{available_workers} workers "
+            f"({worker_risk.utilization:.0%}).", None,
+        ))
+    if execution_device == "cpu":
+        checks.append((
+            "Execution mode", "warning", False,
+            f"Parallel CPU mode with {workers} workers; CUDA/MPS disabled for this run.", None,
+        ))
+    else:
+        checks.append((
+            "Execution mode", "success", False,
+            "Single worker; accelerator selection is automatic.", None,
+        ))
+    checks.append((
+        "BiRefNet compute", device_report.severity,
+        mask_method == "birefnet" and device_report.severity == "error",
+        device_report.detail, None,
+    ))
+    checks.append(("Template dimensions", "success" if template_error is None else "error", template_error is not None,
+                   template_error or "OK", None))
 
     if input_source == "Local folder":
         image_paths = collect_folder_images(input_dir)
-        checks.append(("Input images", len(image_paths) > 0, f"{len(image_paths)} image(s) found"))
+        checks.append(("Input images", "success" if image_paths else "error", not bool(image_paths),
+                       f"{len(image_paths)} image(s) found", None))
     else:
         image_paths = []
         valid_upload_count = sum(
             1 for uploaded_file in uploaded_files
             if Path(uploaded_file.name).suffix.lower() in VALID_EXTENSIONS
         )
-        checks.append(("Uploaded images", valid_upload_count > 0, f"{valid_upload_count} valid image(s) selected"))
+        checks.append(("Uploaded images", "success" if valid_upload_count else "error", not bool(valid_upload_count),
+                       f"{valid_upload_count} valid image(s) selected", None))
 
-    for label, ok, detail in checks:
-        if ok:
-            st.success(f"{label}: {detail}")
-        else:
-            st.error(f"{label}: {detail}")
+    for label, severity, blocking, detail, setup_page in checks:
+        getattr(st, severity)(f"{label}: {detail}")
+        if setup_page:
+            st.page_link(
+                setup_page,
+                label="Open BiRefNet setup",
+                icon=":material/download:",
+                width="content",
+            )
 
-    ready = all(ok for _, ok, _ in checks)
+    ready = not any(blocking for _, _, blocking, _, _ in checks)
 
     image_count = len(image_paths) if input_source == "Local folder" else valid_upload_count
     large_batch_ok = True
@@ -343,6 +489,12 @@ def main():
     )
     if run_clicked:
         output_path.mkdir(parents=True, exist_ok=True)
+        run_sample_ids = []
+        succeeded_so_far = 0
+        break_glass_acknowledged = break_glass_unlocked
+        if worker_risk.requires_break_glass:
+            # An acknowledgement authorizes one high-risk run only.
+            st.session_state.pop("break_glass_available_workers", None)
 
         with tempfile.TemporaryDirectory(prefix="leaf_morpho_uploads_") as tmpdir:
             if input_source == "Upload images":
@@ -353,6 +505,16 @@ def main():
             counts_box = st.empty()
 
             def update_progress(status):
+                nonlocal succeeded_so_far
+                if status["succeeded"] > succeeded_so_far:
+                    current_image = status["current_image"]
+                    if lm.is_target_box_image(current_image):
+                        sample_id = lm.target_box_sample_id(current_image)
+                    else:
+                        sample_id = Path(current_image).stem
+                    run_sample_ids.append(sample_id)
+                succeeded_so_far = status["succeeded"]
+
                 total = max(status["total"], 1)
                 progress_bar.progress(status["processed"] / total)
                 counts_box.write(
@@ -361,21 +523,28 @@ def main():
                 )
                 status_box.write(f"Current image: `{Path(status['current_image']).name}`")
 
-            with st.spinner("Processing images..."):
-                summary = lm.run_leaf_morpho_batch(
-                    image_paths,
-                    str(output_path),
-                    str(results_path),
-                    template_dimensions=template_dimensions,
-                    output_mode="masks",
-                    mask_method=mask_method,
-                    threshold_value=threshold_value,
-                    workers=int(workers),
-                    progress_callback=update_progress,
-                    write_failures=write_failures,
-                    compact_csv=compact_csv,
-                    save_measurement_axes=False,
-                )
+            try:
+                with st.spinner("Processing images..."):
+                    summary = lm.run_leaf_morpho_batch(
+                        image_paths,
+                        str(output_path),
+                        str(results_path),
+                        template_dimensions=template_dimensions,
+                        output_mode="masks",
+                        mask_method=mask_method,
+                        threshold_value=threshold_value,
+                        workers=int(workers),
+                        execution_device=execution_device,
+                        worker_safety_check=True,
+                        break_glass_acknowledged=break_glass_acknowledged,
+                        progress_callback=update_progress,
+                        write_failures=write_failures,
+                        compact_csv=compact_csv,
+                        save_measurement_axes=False,
+                    )
+            except ValueError as exc:
+                st.error(f"Run prevented by worker safety checks: {exc}")
+                return
 
         # Persist only what the results view needs; keep large lists out of session
         # state so the page stays light after big runs.
@@ -385,12 +554,18 @@ def main():
             "total": summary["total"],
             "workers": summary["workers"],
             "worker_reason": summary["worker_reason"],
+            "execution_device": summary["execution_device"],
             "failure_rows": summary["failure_rows"][:200],
             "failure_overflow": max(0, len(summary["failure_rows"]) - 200),
             "results_path": str(results_path),
             "output_path": str(output_path),
             "mask_method": mask_method,
         }
+        run_pairs = collect_output_pairs(output_path, run_sample_ids)
+        st.session_state["viewer_pairs"] = merge_viewer_pairs(
+            st.session_state["viewer_pairs"],
+            run_pairs,
+        )
         # A fresh run invalidates any previously prepared ZIP.
         st.session_state.pop("export_zip_path", None)
 
@@ -410,7 +585,10 @@ def render_results(lm):
         f"Done. {run['succeeded']} succeeded, {run['failed']} failed "
         f"(of {run['total']}). Results written to `{results_path}`."
     )
-    st.caption(f"Workers used: {run['workers']} ({run['worker_reason']}).")
+    device_label = "CPU only" if run["execution_device"] == "cpu" else "automatic accelerator selection"
+    st.caption(
+        f"Workers used: {run['workers']} ({run['worker_reason']}); compute: {device_label}."
+    )
 
     if run["failure_rows"]:
         with st.expander(f"Processing warnings and failures ({run['failed']})"):
@@ -424,7 +602,7 @@ def render_results(lm):
         st.markdown("**Measurements**")
         preview_rows = read_csv_preview(results_path, limit=200)
         st.caption(f"Showing {len(preview_rows)} of {total_rows} row(s).")
-        st.dataframe(preview_rows, use_container_width=True)
+        st.dataframe(preview_rows, width="stretch")
         st.download_button(
             "Download results CSV",
             data=results_path.read_bytes(),
@@ -432,12 +610,11 @@ def render_results(lm):
             mime="text/csv",
         )
 
-    render_output_preview(output_path)
+    render_output_preview(st.session_state.get("viewer_pairs", []))
     render_zip_export(results_path, output_path)
 
 
-def render_output_preview(output_path):
-    pairs = collect_output_pairs(output_path)
+def render_output_preview(pairs):
     if not pairs:
         return
 

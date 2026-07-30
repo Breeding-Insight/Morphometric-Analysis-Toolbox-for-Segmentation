@@ -9,11 +9,12 @@ def _reload_paths(monkeypatch, tmp_path, **env):
 
     Also isolates path resolution from real files outside tmp_path: the repo
     checkout permanently ships a real weights/rf_detr_marker.pth (see
-    docs/weights.md -- it's committed via Git LFS since HF auto-fetch isn't
-    wired up yet), and a local dev machine may also have a real
-    weights/birefnet_leaf.pth on disk. Neither should leak into tests that
-    want to simulate "nothing present" -- only files the test itself writes
-    under tmp_path should be visible.
+    docs/weights.md -- committed via Git LFS, fetched on every clone), and a
+    checkout that has pulled BiRefNet may also have a real
+    weights/birefnet_leaf.pth on disk (it's committed too, but excluded from
+    the default clone/fetch). Neither should leak into tests that want to
+    simulate "nothing present" -- only files the test itself writes under
+    tmp_path should be visible.
     """
     for key in ("MATS_WEIGHTS_DIR", "XDG_CACHE_HOME",
                 "RF_DETR_MARKER_CHECKPOINT", "BIREFNET_CHECKPOINT"):

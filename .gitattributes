@@ -1,14 +1,18 @@
 # Git LFS support for model weights (see docs/weights.md).
 #
-# weights/rf_detr_marker.pth (~134 MB) IS committed via Git LFS -- it's
-# mandatory for both segmentation paths, and Hugging Face auto-fetch isn't
-# configured yet (_HF_REPO_ID in src/mats/weights.py), so committing it is the
-# only working out-of-the-box path today. Once the HF repo is live, this can
-# move to auto-fetch-only.
+# Both checkpoints are committed via Git LFS. Hugging Face auto-fetch is a
+# second, independent channel (src/mats/weights.py, _HF_REPO_ID) -- Git LFS
+# exists in parallel because our primary collaborators (USDA) cannot reach
+# huggingface.co, so LFS is not optional infrastructure for them.
 #
-# weights/birefnet_leaf.pth (~2.65 GB) is NOT committed -- it's optional, and
-# committing it would force every `git clone` to download 2.65 GB and spend
-# the repo's LFS bandwidth quota. Fetch it explicitly with
-# `mats fetch-weights --only birefnet` (or `--all`) when you need
-# --mask-method birefnet.
+# weights/rf_detr_marker.pth (~134 MB) is fetched on every `git clone` -- it's
+# mandatory for both segmentation paths, so a checkout should be immediately
+# runnable without an extra download step.
+#
+# weights/birefnet_leaf.pth (~2.65 GB) is committed but excluded from the
+# default clone/fetch via .lfsconfig (lfs.fetchexclude) -- it's optional, and
+# committing it without the exclusion would force every `git clone` to
+# download 2.65 GB and spend the repo's LFS bandwidth quota. Fetch it via the
+# "BiRefNet setup" page in the app, or:
+#   git lfs pull --include="weights/birefnet_leaf.pth"
 weights/*.pth filter=lfs diff=lfs merge=lfs -text

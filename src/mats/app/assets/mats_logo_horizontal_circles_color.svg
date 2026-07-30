@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 200" role="img"
-     aria-label="MATs — Morphometric Analysis Tools">
-  <title>MATs — Morphometric Analysis Tools</title>
+     aria-label="MATS — Morphometric Analysis Toolbox for Segmentation">
+  <title>MATS — Morphometric Analysis Toolbox for Segmentation</title>
   <style>
     /* red = fiducial markers, grey = ROI box, green = leaf + wordmark */
     .frame { fill: none; stroke: #8c8c8c; stroke-width: 3.5;
@@ -8,13 +8,15 @@
     .marker{ fill: none; stroke: #d62828; stroke-width: 3; }
     .dot   { fill: #d62828; stroke: none; }
     .leaf  { fill: none; stroke: #25463d; stroke-linecap: round; stroke-linejoin: round; }
-    .blade { stroke-width: 4;   vector-effect: non-scaling-stroke; }
-    .rib   { stroke-width: 3;   vector-effect: non-scaling-stroke; }
-    .vein  { stroke-width: 2.4; vector-effect: non-scaling-stroke; }
+    /* strokes must scale with the artwork -- non-scaling-stroke pins them to a
+       fixed screen width, which fills the leaf in solid at header sizes */
+    .blade { stroke-width: 4; }
+    .rib   { stroke-width: 3; }
+    .vein  { stroke-width: 2.4; }
     .word  { fill: #25463d; font-family: "Helvetica Neue", Arial, sans-serif;
              font-weight: 600; font-size: 78px; letter-spacing: 1px; }
     .tag   { fill: #8c8c8c; font-family: "Helvetica Neue", Arial, sans-serif;
-             font-weight: 400; font-size: 14.5px; letter-spacing: 4px; }
+             font-weight: 400; font-size: 21px; letter-spacing: 2px; }
   </style>
 
   <g transform="translate(4,8) scale(0.92)">
@@ -40,6 +42,11 @@
     </g>
   </g>
 
-  <text class="word" x="212" y="108">MATs</text>
-  <text class="tag"  x="215" y="140">MORPHOMETRIC ANALYSIS TOOLS</text>
+  <!-- textLength pins each row's width so the lockup is stable when the
+       renderer falls back to a wider sans-serif (e.g. DejaVu on Linux) -->
+  <text class="word" x="212" y="96">MATS</text>
+  <text class="tag" x="215">
+    <tspan x="215" y="133" textLength="326" lengthAdjust="spacing">MORPHOMETRIC ANALYSIS</tspan>
+    <tspan x="215" y="160" textLength="374" lengthAdjust="spacing">TOOLBOX FOR SEGMENTATION</tspan>
+  </text>
 </svg>

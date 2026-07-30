@@ -3,8 +3,8 @@
 # Standard library imports
 import os
 import re
-import multiprocessing as mp
 import csv
+import threading
 from itertools import combinations
 import concurrent.futures
 from pathlib import Path
@@ -52,6 +52,7 @@ from .paths import (
     BIREFNET_CHECKPOINT,
     _resolve_checkpoint,
 )
+from .devices import available_cpu_workers, birefnet_device_report, worker_risk_report
 
 RF_DETR_MARKER_RESOLUTION = 1120
 RF_DETR_MARKER_CONFIDENCE = 0.5
@@ -86,12 +87,14 @@ THRESHOLD_LEVELS = {
     "medium": 125,
     "high": 150,
 }
-_MARKER_MODEL_V3 = None
-_RF_DETR_MARKER_DEVICE = None
-_BIREFNET_MODEL = None
-_BIREFNET_DEVICE = None
+_MARKER_MODELS = {}
+_MARKER_MODEL_LOCK = threading.Lock()
+_BIREFNET_MODELS = {}
+_BIREFNET_MODEL_LOCK = threading.Lock()
 
-def resolve_rfdetr_device():
+def resolve_rfdetr_device(device_override=None):
+    if device_override is not None:
+        return device_override
     forced_device = os.environ.get("RF_DETR_DEVICE")
     if forced_device:
         return forced_device.lower()
@@ -102,24 +105,27 @@ def resolve_rfdetr_device():
     return "cpu"
 
 
-def get_marker_model():
-    """Lazy-load the RF-DETR marker detection model once per process."""
-    global _MARKER_MODEL_V3, _RF_DETR_MARKER_DEVICE
-    if _MARKER_MODEL_V3 is None:
-        from . import weights
-        checkpoint = weights.ensure_weight("rf-detr")  # resolves or auto-fetches once
-        _RF_DETR_MARKER_DEVICE = resolve_rfdetr_device()
-        _MARKER_MODEL_V3 = RFDETRLarge(
-            resolution=RF_DETR_MARKER_RESOLUTION,
-            pretrain_weights=str(checkpoint),
-            device=_RF_DETR_MARKER_DEVICE,
-        )
-        if _RF_DETR_MARKER_DEVICE != "mps":
-            try:
-                _MARKER_MODEL_V3.optimize_for_inference()
-            except Exception as exc:
-                print(f"RF-DETR optimize_for_inference() skipped on {_RF_DETR_MARKER_DEVICE}: {exc}")
-    return _MARKER_MODEL_V3
+def get_marker_model(device_override=None):
+    """Lazy-load one RF-DETR model per requested device."""
+    device = resolve_rfdetr_device(device_override)
+    if device not in _MARKER_MODELS:
+        with _MARKER_MODEL_LOCK:
+            if device in _MARKER_MODELS:
+                return _MARKER_MODELS[device]
+            from . import weights
+            checkpoint = weights.ensure_weight("rf-detr")  # resolves or auto-fetches once
+            model = RFDETRLarge(
+                resolution=RF_DETR_MARKER_RESOLUTION,
+                pretrain_weights=str(checkpoint),
+                device=device,
+            )
+            if device != "mps":
+                try:
+                    model.optimize_for_inference()
+                except Exception as exc:
+                    print(f"RF-DETR optimize_for_inference() skipped on {device}: {exc}")
+            _MARKER_MODELS[device] = model
+    return _MARKER_MODELS[device]
 
 
 def pad_to_square_for_rfdetr(
@@ -160,10 +166,10 @@ def unpad_xyxy(xyxy, pad_info):
     return boxes[0] if single_box else boxes
 
 
-def detect_marker_geometry(image_bgr, confidence=RF_DETR_MARKER_CONFIDENCE):
+def detect_marker_geometry(image_bgr, confidence=RF_DETR_MARKER_CONFIDENCE, device_override=None):
     pil_img = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
     padded_img, pad_info = pad_to_square_for_rfdetr(pil_img)
-    detections = get_marker_model().predict(padded_img, threshold=confidence)
+    detections = get_marker_model(device_override).predict(padded_img, threshold=confidence)
     xyxy = np.asarray(detections.xyxy, dtype=np.float32)
     if xyxy.size == 0:
         return np.empty((0, 2), dtype=np.int32), np.empty((0, 4), dtype=np.int32)
@@ -178,47 +184,48 @@ def detect_marker_geometry(image_bgr, confidence=RF_DETR_MARKER_CONFIDENCE):
     return np.rint(centers).astype(np.int32), np.rint(mapped_xyxy).astype(np.int32)
 
 
-def detect_marker_centers(image_bgr, confidence=RF_DETR_MARKER_CONFIDENCE):
-    centers, _ = detect_marker_geometry(image_bgr, confidence=confidence)
+def detect_marker_centers(image_bgr, confidence=RF_DETR_MARKER_CONFIDENCE, device_override=None):
+    centers, _ = detect_marker_geometry(image_bgr, confidence=confidence, device_override=device_override)
     return centers
 
 
-def resolve_birefnet_device():
-    forced_device = os.environ.get("BIREFNET_DEVICE")
-    if forced_device:
-        return torch.device(forced_device.lower())
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
+def resolve_birefnet_device(device_override=None):
+    if device_override is not None:
+        return torch.device(device_override)
+    report = birefnet_device_report()
+    if report.severity == "error":
+        raise RuntimeError(report.detail)
+    return torch.device(report.device)
 
 
-def get_birefnet_model():
-    """Lazy-load the fine-tuned BiRefNet model once per process."""
-    global _BIREFNET_MODEL, _BIREFNET_DEVICE
-    if _BIREFNET_MODEL is None:
-        from . import weights
-        checkpoint = weights.ensure_weight("birefnet")  # resolves or auto-fetches once
+def get_birefnet_model(device_override=None):
+    """Lazy-load one fine-tuned BiRefNet model per requested device."""
+    device = resolve_birefnet_device(device_override)
+    cache_key = str(device)
+    if cache_key not in _BIREFNET_MODELS:
+        with _BIREFNET_MODEL_LOCK:
+            if cache_key in _BIREFNET_MODELS:
+                return _BIREFNET_MODELS[cache_key]
+            from . import weights
+            checkpoint = weights.ensure_weight("birefnet")  # resolves or auto-fetches once
 
-        from transformers import AutoModelForImageSegmentation
+            from transformers import AutoModelForImageSegmentation
 
-        _BIREFNET_DEVICE = resolve_birefnet_device()
-        model = AutoModelForImageSegmentation.from_pretrained(
-            BIREFNET_PRETRAINED,
-            trust_remote_code=True,
-        )
-        ckpt = torch.load(
-            str(checkpoint),
-            map_location=_BIREFNET_DEVICE,
-            weights_only=False,
-        )
-        state_dict = ckpt.get("model_state_dict", ckpt)
-        model.load_state_dict(state_dict, strict=False)
-        model = model.to(_BIREFNET_DEVICE)
-        model.eval()
-        _BIREFNET_MODEL = model
-    return _BIREFNET_MODEL
+            model = AutoModelForImageSegmentation.from_pretrained(
+                BIREFNET_PRETRAINED,
+                trust_remote_code=True,
+            )
+            ckpt = torch.load(
+                str(checkpoint),
+                map_location=device,
+                weights_only=False,
+            )
+            state_dict = ckpt.get("model_state_dict", ckpt)
+            model.load_state_dict(state_dict, strict=False)
+            model = model.to(device)
+            model.eval()
+            _BIREFNET_MODELS[cache_key] = model
+    return _BIREFNET_MODELS[cache_key]
 
 
 def _preprocess_birefnet_image(image_bgr, image_size=BIREFNET_IMAGE_SIZE):
@@ -237,10 +244,11 @@ def predict_birefnet_mask(
     image_bgr,
     image_size=BIREFNET_IMAGE_SIZE,
     threshold=BIREFNET_THRESHOLD,
+    device_override=None,
 ):
     """Predict a single-channel 0/255 leaf foreground mask for a BGR image."""
-    model = get_birefnet_model()
-    device = _BIREFNET_DEVICE or resolve_birefnet_device()
+    model = get_birefnet_model(device_override)
+    device = resolve_birefnet_device(device_override)
     orig_h, orig_w = image_bgr.shape[:2]
     inp = _preprocess_birefnet_image(image_bgr, image_size=image_size).to(device)
 
@@ -522,11 +530,11 @@ def keep_largest_mask_component(binary_mask):
     return largest_mask
 
 
-def create_leaf_mask(target_box, mask_method, threshold_value):
+def create_leaf_mask(target_box, mask_method, threshold_value, device_override=None):
     if mask_method == "threshold":
         binary_mask = threshold_mask(target_box, threshold_value)
     else:
-        binary_mask = predict_birefnet_mask(target_box)
+        binary_mask = predict_birefnet_mask(target_box, device_override=device_override)
 
     if not np.any(binary_mask):
         return None
@@ -703,7 +711,9 @@ def write_compact_results_csv(result_rows, results_path):
 
 
 def default_worker_count(input_images, output_mode, mask_method):
-    cpu_default = max(1, int(mp.cpu_count() / 2))
+    cpu_default = max(1, available_cpu_workers() // 2)
+    if input_images:
+        cpu_default = min(cpu_default, len(input_images))
     all_target_boxes = bool(input_images) and all(is_target_box_image(p) for p in input_images)
     needs_rfdetr = not all_target_boxes
     needs_birefnet = output_mode == "masks" and mask_method == "birefnet"
@@ -786,7 +796,11 @@ def leaf_morpho(
     threshold_value=THRESHOLD_LEVELS["medium"],
     scale_axis="average",
     save_measurement_axes=True,
+    execution_device="auto",
 ):
+    if execution_device not in {"auto", "cpu"}:
+        raise ValueError("execution_device must be 'auto' or 'cpu'")
+    device_override = "cpu" if execution_device == "cpu" else None
     if physical_dimensions is not None:
         template_dimensions = physical_dimensions
     is_target_box_input = is_target_box_image(input_image)
@@ -830,6 +844,7 @@ def leaf_morpho(
                 target_box,
                 mask_method,
                 threshold_value,
+                device_override,
             )
             if binary_mask is None:
                 return _fail(stage, "leaf not detected")
@@ -935,7 +950,10 @@ def leaf_morpho(
 
         # Find four markers with local RF-DETR.
         stage = "MARKERS_PREDICT"
-        coordinates_array, marker_boxes = detect_marker_geometry(masked_img)
+        coordinates_array, marker_boxes = detect_marker_geometry(
+            masked_img,
+            device_override=device_override,
+        )
 
         # If markers are missing, skip (not a valid frame for measurements)
         if coordinates_array.size == 0 or len(coordinates_array) < 4:
@@ -999,6 +1017,7 @@ def leaf_morpho(
             target_box,
             mask_method,
             threshold_value,
+            device_override,
         )
         if binary_mask is None:
             return _fail(stage, "leaf not detected")
@@ -1047,6 +1066,7 @@ def _process_batch_image(
     threshold_value,
     scale_axis,
     save_measurement_axes,
+    execution_device,
 ):
     result = leaf_morpho(
         input_image,
@@ -1059,6 +1079,7 @@ def _process_batch_image(
         threshold_value,
         scale_axis,
         save_measurement_axes,
+        execution_device,
     )
     return input_image, result, None
 
@@ -1079,16 +1100,22 @@ def run_leaf_morpho_batch(
     save_measurement_axes=False,
     csv_update_interval=50,
     serialize_model_inference=True,
+    execution_device="auto",
+    worker_safety_check=False,
+    break_glass_acknowledged=False,
 ):
     """Run the leaf morphometrics pipeline with per-image error isolation.
 
-    ``serialize_model_inference`` forces single-worker execution whenever a
-    model-backed path is involved (BiRefNet, or any run that is not purely
-    target-box extraction). This is the safe default for the Streamlit app,
-    which shares one in-process model across requests. The CLI passes
-    ``False`` so an explicit ``--workers`` value is honored on the command line.
+    ``execution_device='cpu'`` explicitly routes RF-DETR and BiRefNet to CPU,
+    making multi-worker application runs safe. ``auto`` preserves the existing
+    accelerator selection behavior. ``serialize_model_inference`` remains a
+    conservative guard for callers that do not request CPU parallel execution.
+    When ``worker_safety_check`` is enabled, counts above 75% of the available
+    CPU allocation require an explicit ``break_glass_acknowledged`` override.
     """
     input_images = list(input_images or [])
+    if execution_device not in {"auto", "cpu"}:
+        raise ValueError("execution_device must be 'auto' or 'cpu'")
     if output_dir is not False:
         os.makedirs(output_dir, exist_ok=True)
 
@@ -1097,8 +1124,24 @@ def run_leaf_morpho_batch(
     else:
         worker_reason = "user override"
     workers = max(1, int(workers))
+    if worker_safety_check:
+        worker_risk = worker_risk_report(workers, available_cpu_workers())
+        if workers > worker_risk.available_workers:
+            raise ValueError(
+                f"Requested {workers} workers, but only {worker_risk.available_workers} are available."
+            )
+        if worker_risk.requires_break_glass and not break_glass_acknowledged:
+            raise ValueError(
+                f"{workers} workers uses {worker_risk.utilization:.0%} of the available CPU allocation. "
+                "High-risk worker counts require break-glass acknowledgement."
+            )
     all_target_boxes = bool(input_images) and all(is_target_box_image(p) for p in input_images)
-    if serialize_model_inference and workers > 1 and (mask_method == "birefnet" or not all_target_boxes):
+    if (
+        serialize_model_inference
+        and execution_device != "cpu"
+        and workers > 1
+        and (mask_method == "birefnet" or not all_target_boxes)
+    ):
         workers = 1
         worker_reason = f"{worker_reason}; serialized for model-backed UI inference"
 
@@ -1160,6 +1203,7 @@ def run_leaf_morpho_batch(
                     threshold_value,
                     scale_axis,
                     save_measurement_axes,
+                    execution_device,
                 )
                 _record_result(input_image, result)
             except Exception as exc:
@@ -1177,6 +1221,7 @@ def run_leaf_morpho_batch(
                     threshold_value,
                     scale_axis,
                     save_measurement_axes,
+                    execution_device,
                 ): input_image
                 for input_image in input_images
             }
@@ -1211,4 +1256,5 @@ def run_leaf_morpho_batch(
         "compact_rows": [compact_measurement_row(row) for row in result_rows],
         "workers": workers,
         "worker_reason": worker_reason,
+        "execution_device": execution_device,
     }

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img"
-     aria-label="MATs mark: red fiducial markers, black ROI box, green leaf">
-  <title>MATs — Morphometric Analysis Tools</title>
+     aria-label="MATS mark: red fiducial markers, grey ROI box, green leaf">
+  <title>MATS — Morphometric Analysis Toolbox for Segmentation</title>
   <style>
     /* red = template fiducial markers, grey = ROI box (reads on light or dark), green = leaf */
     .frame { fill: none; stroke: #8c8c8c; stroke-width: 3.5;

@@ -80,6 +80,10 @@ def build_parser():
     fetch_target.add_argument('--all', action='store_true',
                        help='Fetch both checkpoints (RF-DETR + the ~2.65 GB BiRefNet).')
     fetch.add_argument('--force', action='store_true', help='Re-download even if the file already exists.')
+    fetch.add_argument('--source', choices=('auto', 'hf', 'lfs'), default='auto',
+                       help='Download channel: auto picks Hugging Face if configured, else Git LFS; '
+                            'hf/lfs force one channel (lfs requires a Git checkout with Git LFS installed, '
+                            'and is the channel to use on networks that block huggingface.co).')
 
     sub.add_parser('doctor', help='Report weights, devices and QR decoders.')
 
@@ -242,7 +246,7 @@ def _resolve_fetch_only(args):
 
 def _cmd_fetch_weights(args):
     from . import weights
-    return weights.fetch(only=_resolve_fetch_only(args), force=args.force)
+    return weights.fetch(only=_resolve_fetch_only(args), force=args.force, source=args.source)
 
 
 def _cmd_doctor(_args):

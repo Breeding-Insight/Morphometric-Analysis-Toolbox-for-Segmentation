@@ -1,7 +1,6 @@
-from pathlib import Path
-
 import streamlit as st
 
+from mats.app import branding
 from mats.template_exports import render_template_idml, render_template_pdf
 from mats.template_layout import (
     MAX_ASPECT_RATIO,
@@ -12,10 +11,6 @@ from mats.template_layout import (
     minimum_template_edge,
     round_to_increment,
 )
-
-
-APP_DIR = Path(__file__).resolve().parent.parent
-ASSETS_DIR = APP_DIR / "assets"
 
 
 def _clear_generated_template():
@@ -62,20 +57,12 @@ def _file_stem(layout):
     return f"{width}x{length}{layout.unit}_template"
 
 
-mark_icon = ASSETS_DIR / "mats_mark_circles_color.svg"
 st.set_page_config(
-    page_title="MATs — Template creator",
-    page_icon=str(mark_icon) if mark_icon.is_file() else "🌿",
+    page_title="MATS — Template creator",
+    page_icon=branding.page_icon(),
     layout="wide",
 )
-
-logo_wide = ASSETS_DIR / "mats_logo_horizontal_circles_color.svg"
-if logo_wide.is_file():
-    st.logo(
-        str(logo_wide),
-        size="large",
-        icon_image=str(mark_icon) if mark_icon.is_file() else None,
-    )
+branding.apply_logo()
 
 st.session_state.setdefault("template_unit", "in")
 st.session_state.setdefault("template_previous_unit", "in")
@@ -102,7 +89,7 @@ with st.expander("How this works"):
         "margins: 1.5 in top / 1 in elsewhere, or 3.5 cm top / 2.5 cm elsewhere.\n"
         "- The QR code is centered in the top header.\n"
         "- The QR code stores the derived marker-to-marker observation area, "
-        "which MATs uses for measurement scale.\n"
+        "which MATS uses for measurement scale.\n"
         "- Use PDF for printing. IDML is editable in Adobe InDesign; changing "
         "marker positions or scaling the artwork changes the calibration."
     )
