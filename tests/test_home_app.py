@@ -1,8 +1,8 @@
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
+pd = pytest.importorskip("pandas")
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest
 from mats.app.Home import (
