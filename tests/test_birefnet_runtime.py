@@ -9,12 +9,10 @@ import pytest
 def test_runtime_reports_missing_dependencies(monkeypatch):
     from mats import birefnet_runtime
 
-    real_import = birefnet_runtime.importlib.import_module
-
     def fake_import(name):
-        if name in {"kornia", "timm"}:
-            raise ModuleNotFoundError(name)
-        return real_import(name)
+        if name == "einops":
+            return types.ModuleType(name)
+        raise ModuleNotFoundError(name)
 
     monkeypatch.setattr(birefnet_runtime.importlib, "import_module", fake_import)
     status = birefnet_runtime.birefnet_runtime_status()
