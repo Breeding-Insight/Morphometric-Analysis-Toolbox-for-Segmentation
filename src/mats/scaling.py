@@ -24,6 +24,8 @@ RESULTS_FIELDNAMES = [
     "scale_aspect_ratio",
     "source",
 ]
+RESULT_UNITS = ("mm", "cm", "in")
+DEFAULT_RESULTS_UNIT = "cm"
 QR_TRACE_FIELDNAMES = (
     "qr_opencv",
     "qr_pyzbar_zbar",
@@ -33,9 +35,86 @@ COMPACT_RESULTS_FIELDNAMES = ["sample_id", "area_cm2", "width_cm", "length_cm"]
 NA_VALUE = "NA"
 
 
-def full_results_fieldnames(qr_backend_fields=()):
+def validate_results_unit(results_unit):
+    """Return a supported result unit or raise a clear validation error."""
+    if results_unit not in RESULT_UNITS:
+        raise ValueError(
+            f"results_unit must be one of {', '.join(RESULT_UNITS)}"
+        )
+    return results_unit
+
+
+def result_measurement_fieldnames(results_unit=DEFAULT_RESULTS_UNIT, compact=False):
+    """Return unit-specific measurement columns for one CSV schema."""
+    unit = validate_results_unit(results_unit)
+    area_name = f"area_{unit}2" if compact else f"leaf_area_{unit}2"
+    return [area_name, f"width_{unit}", f"length_{unit}"]
+
+
+def results_fieldnames(results_unit=DEFAULT_RESULTS_UNIT):
+    """Return the full-schema columns for measurements in ``results_unit``."""
+    unit = validate_results_unit(results_unit)
+    return [
+        "sample_id",
+        *result_measurement_fieldnames(unit),
+        f"px_per_{unit}_width",
+        f"px_per_{unit}_height",
+        "scale_aspect_ratio",
+        "source",
+    ]
+
+
+def compact_results_fieldnames(results_unit=DEFAULT_RESULTS_UNIT):
+    """Return the compact-schema columns for measurements in ``results_unit``."""
+    unit = validate_results_unit(results_unit)
+    return ["sample_id", *result_measurement_fieldnames(unit, compact=True)]
+
+
+def full_results_fieldnames(qr_backend_fields=(), results_unit=DEFAULT_RESULTS_UNIT):
     """Return full-schema columns, optionally including available QR traces."""
-    return [*RESULTS_FIELDNAMES, *qr_backend_fields]
+    return [*results_fieldnames(results_unit), *qr_backend_fields]
+
+
+def length_conversion_factor(results_unit=DEFAULT_RESULTS_UNIT):
+    """Return the multiplier that converts a centimeter length to ``results_unit``."""
+    unit = validate_results_unit(results_unit)
+    return {"mm": 10.0, "cm": 1.0, "in": 1.0 / 2.54}[unit]
+
+
+def _convert_value(value, factor):
+    if value == NA_VALUE:
+        return NA_VALUE
+    return float(value) * factor
+
+
+def converted_measurement_row(row, results_unit=DEFAULT_RESULTS_UNIT):
+    """Return a canonical centimeter row converted to ``results_unit``.
+
+    Pixel calibration remains internally in pixels per centimeter. The exported
+    pixels-per-unit values therefore use the inverse length conversion factor.
+    Non-measurement fields, including optional QR trace columns, are retained.
+    """
+    unit = validate_results_unit(results_unit)
+    length_factor = length_conversion_factor(unit)
+    converted = {
+        "sample_id": row.get("sample_id", NA_VALUE),
+        f"leaf_area_{unit}2": _convert_value(row.get("leaf_area_cm2", NA_VALUE), length_factor ** 2),
+        f"width_{unit}": _convert_value(row.get("width_cm", NA_VALUE), length_factor),
+        f"length_{unit}": _convert_value(row.get("length_cm", NA_VALUE), length_factor),
+        f"px_per_{unit}_width": _convert_value(
+            row.get("px_per_cm_width", NA_VALUE), 1.0 / length_factor
+        ),
+        f"px_per_{unit}_height": _convert_value(
+            row.get("px_per_cm_height", NA_VALUE), 1.0 / length_factor
+        ),
+        "scale_aspect_ratio": row.get("scale_aspect_ratio", NA_VALUE),
+        "source": row.get("source", NA_VALUE),
+    }
+    canonical_fields = set(RESULTS_FIELDNAMES)
+    converted.update({
+        key: value for key, value in row.items() if key not in canonical_fields
+    })
+    return converted
 
 
 def px_per_cm_axes(box_shape, template_width, template_height, unit):
@@ -87,11 +166,13 @@ def measurement_row(sample_id, white_pixels, bbox_w, bbox_h, px_per_cm_width, px
     }
 
 
-def compact_measurement_row(row):
+def compact_measurement_row(row, results_unit=DEFAULT_RESULTS_UNIT):
     """Return only the UI-facing measurements requested for bulk export."""
+    unit = validate_results_unit(results_unit)
+    converted = converted_measurement_row(row, unit)
     return {
         "sample_id": row.get("sample_id", NA_VALUE),
-        "area_cm2": row.get("leaf_area_cm2", NA_VALUE),
-        "width_cm": row.get("width_cm", NA_VALUE),
-        "length_cm": row.get("length_cm", NA_VALUE),
+        f"area_{unit}2": converted[f"leaf_area_{unit}2"],
+        f"width_{unit}": converted[f"width_{unit}"],
+        f"length_{unit}": converted[f"length_{unit}"],
     }

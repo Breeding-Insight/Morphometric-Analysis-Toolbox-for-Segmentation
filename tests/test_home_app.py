@@ -93,6 +93,7 @@ def test_home_page_renders_analyze_view_without_worker_control():
     assert "Launch analysis" in subheaders
     assert "**WORKSPACE NAVIGATION**" in [item.value for item in app.markdown]
     assert "**4 · Preflight**" in [item.value for item in app.markdown]
+    assert app.segmented_control(key="results_unit").value == "cm"
 
 
 def test_diagnostics_tab_renders_compute_status_without_worker_control():
@@ -178,14 +179,29 @@ def test_measurement_normalization_supports_full_and_compact_schemas():
     full = normalize_measurements(full_schema)
     compact = normalize_measurements(compact_schema)
 
-    assert full.loc[0, "leaf_area_cm2"] == 12.5
-    assert compact.loc[0, "leaf_area_cm2"] == 8.0
+    assert full.loc[0, "leaf_area"] == 12.5
+    assert compact.loc[0, "leaf_area"] == 8.0
     assert summarize_measurements(full) == {
         "count": 1,
-        "median_area_cm2": 12.5,
-        "median_width_cm": 2.5,
-        "median_length_cm": 7.0,
+        "median_area": 12.5,
+        "median_width": 2.5,
+        "median_length": 7.0,
     }
+
+
+def test_measurement_normalization_supports_inch_columns():
+    frame = pd.DataFrame({
+        "sample_id": ["inch"],
+        "area_in2": [2.5],
+        "width_in": [1.5],
+        "length_in": [3.0],
+    })
+
+    measurements = normalize_measurements(frame, "in")
+
+    assert measurements.loc[0, "leaf_area"] == 2.5
+    assert measurements.loc[0, "width"] == 1.5
+    assert measurements.loc[0, "length"] == 3.0
 
 
 def test_results_tab_renders_measurement_dashboard(tmp_path):
@@ -231,6 +247,36 @@ def test_results_tab_renders_measurement_dashboard(tmp_path):
         item.value for item in app.markdown
     }
     assert "**QR decoder trace**" not in {item.value for item in app.markdown}
+
+
+def test_results_tab_uses_the_completed_run_unit(tmp_path):
+    results_path = tmp_path / "leaf_morpho_results.csv"
+    results_path.write_text(
+        "sample_id,area_in2,width_in,length_in\n"
+        "leaf_1,2.5,1.5,3.0\n"
+    )
+    app = AppTest.from_file(str(HOME_PAGE))
+    app.session_state[WORKSPACE_TAB_KEY] = "Results"
+    app.session_state["last_run"] = {
+        "succeeded": 1,
+        "failed": 0,
+        "total": 1,
+        "workers": 1,
+        "worker_reason": "test",
+        "execution_device": "cpu",
+        "failure_rows": [],
+        "failure_overflow": 0,
+        "results_path": str(results_path),
+        "output_path": str(tmp_path),
+        "mask_method": "threshold",
+        "results_unit": "in",
+    }
+    app.run(timeout=30)
+
+    assert not app.exception
+    assert app.metric[1].value == "2.50 in²"
+    assert app.metric[2].value == "1.50 in"
+    assert app.download_button[0].label == "Download results CSV (in)"
 
 
 def test_results_tab_shows_qr_trace_when_full_qr_columns_are_present(tmp_path):

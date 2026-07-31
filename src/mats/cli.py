@@ -69,8 +69,11 @@ def build_parser():
                      help="For --mask-method threshold: auto uses Otsu (recommended); "
                           "low=100, medium=125, high=150.")
     run.add_argument('--csv-schema', choices=('full', 'compact'), default='full',
-                     help='full = area/width/length plus per-axis pixels-per-cm and scale_aspect_ratio '
-                          '(research schema); compact = sample_id, area_cm2, width_cm, length_cm.')
+                     help='full = area/width/length plus per-axis pixels-per-unit and scale_aspect_ratio '
+                          '(research schema); compact = sample_id, area, width, length.')
+    run.add_argument('--results-unit', choices=('mm', 'cm', 'in'), default='cm',
+                     help='Unit for area, width, length, and pixels-per-unit columns in the CSV '
+                          '(default: cm).')
     run.add_argument('--save-axes', action='store_true',
                      help='Also save per-image length/width measurement-axis overlays for QC.')
 
@@ -254,6 +257,7 @@ def _cmd_run(args):
         workers=args.workers,
         write_failures=True,
         compact_csv=(args.csv_schema == "compact"),
+        results_unit=args.results_unit,
         save_measurement_axes=args.save_axes,
         serialize_model_inference=False,
         progress_callback=_make_progress_callback(),

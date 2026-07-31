@@ -1,6 +1,7 @@
 """Worker/device-policy behavior without loading inference models."""
 
 import concurrent.futures
+import csv
 import threading
 import time
 from types import SimpleNamespace
@@ -97,6 +98,32 @@ def test_hybrid_policy_rejects_birefnet(tmp_path):
             execution_device="hybrid",
             mask_method="birefnet",
         )
+
+
+def test_batch_writes_selected_results_unit(monkeypatch, tmp_path):
+    def fake_process(*args):
+        sample_id = args[0]
+        row = core.measurement_row(sample_id, 100, 10, 20, 5.0, 10.0)
+        return sample_id, {"sample_id": sample_id, "status": "ok", "result_row": row}, None
+
+    monkeypatch.setattr(core, "_process_batch_image", fake_process)
+    results_path = tmp_path / "results.csv"
+    core.run_leaf_morpho_batch(
+        ["leaf.jpg"],
+        str(tmp_path),
+        str(results_path),
+        results_unit="mm",
+        compact_csv=False,
+        workers=1,
+        execution_device="cpu",
+    )
+
+    with results_path.open(newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert row["leaf_area_mm2"] == "200.0"
+    assert row["width_mm"] == "20.0"
+    assert row["length_mm"] == "20.0"
+    assert row["px_per_mm_width"] == "0.5"
 
 
 def test_gpu_marker_inference_uses_one_shared_lane(monkeypatch):

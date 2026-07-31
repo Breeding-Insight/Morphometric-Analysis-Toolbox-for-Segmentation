@@ -146,7 +146,8 @@ Common options (full reference in [docs/cli.md](docs/cli.md)):
 | `-t, --template_dimensions` | Legacy/custom marker-centre calibration area | unused |
 | `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast) | `threshold` |
 | `--threshold-level` | `auto` (Otsu) / `low` / `medium` / `high` | `auto` |
-| `--csv-schema` | `full` (area/width/length + per-axis px-per-cm) or `compact` | `full` |
+| `--csv-schema` | `full` (area/width/length + per-axis pixels-per-selected-unit) or `compact` | `full` |
+| `--results-unit` | Measurement-output unit: `mm`, `cm`, or `in` | `cm` |
 | `-w, --workers` | Parallel workers (threshold path only) | auto |
 | `--save-axes` | Also save length/width overlay images for QC | off |
 
@@ -166,7 +167,10 @@ Per image, in the output folder:
 - `{sample_id}_target_box.jpg` — the perspective-corrected observation box
 - `{sample_id}_mask.png` — the leaf segmentation mask
 
-Plus a measurements CSV. Two schemas:
+Plus a measurements CSV. Choose `mm`, `cm` (the default), or `in` with
+`--results-unit` in the CLI or the **Result units** control in the app. The
+selection changes results, dashboard labels, and unit-bearing CSV column names;
+it does not change calibration math. Two schemas:
 
 - **full** (default, research schema) — `sample_id, leaf_area_cm2, width_cm,
   length_cm, px_per_cm_width, px_per_cm_height, scale_aspect_ratio, source`.
@@ -180,7 +184,9 @@ Plus a measurements CSV. Two schemas:
   (`px_per_cm_width / px_per_cm_height`) is a QC signal: it should sit near 1.0,
   and a value far from 1.0 flags a calibration problem (skewed template print,
   lens distortion, a non-planar sheet) worth investigating.
-- **compact** — `sample_id, area_cm2, width_cm, length_cm`.
+- **compact** — `sample_id, area_cm2, width_cm, length_cm` by default. With
+  millimeters or inches selected, `cm` is replaced consistently in the
+  measurement column names.
 
 A `leaf_morpho_failures.csv` records per-image warnings and failures.
 

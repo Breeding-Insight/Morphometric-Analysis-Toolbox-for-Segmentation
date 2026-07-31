@@ -53,10 +53,13 @@ from .scaling import (
     COMPACT_RESULTS_FIELDNAMES,
     NA_VALUE,
     full_results_fieldnames,
+    compact_results_fieldnames,
     px_per_cm_axes,
     measurement_na_row,
     measurement_row,
+    converted_measurement_row,
     compact_measurement_row,
+    validate_results_unit,
 )
 
 # Checkpoint resolution and constants live in mats.paths; re-exported for API
@@ -682,27 +685,39 @@ def measurement_row_from_mask(
     return measurement_row(sample_id, white_pixels, w, h, px_per_cm_width, px_per_cm_height)
 
 
-def write_results_csv(result_rows, results_path, qr_backend_fields=()):
+def write_results_csv(
+    result_rows,
+    results_path,
+    qr_backend_fields=(),
+    results_unit="cm",
+):
     results_dir = os.path.dirname(os.path.abspath(results_path))
     if results_dir:
         os.makedirs(results_dir, exist_ok=True)
     with open(results_path, "w", newline="") as csvfile:
         writer = csv.DictWriter(
             csvfile,
-            fieldnames=full_results_fieldnames(qr_backend_fields),
+            fieldnames=full_results_fieldnames(qr_backend_fields, results_unit),
         )
         writer.writeheader()
-        writer.writerows(result_rows)
+        writer.writerows(
+            converted_measurement_row(row, results_unit) for row in result_rows
+        )
 
 
-def write_compact_results_csv(result_rows, results_path):
+def write_compact_results_csv(result_rows, results_path, results_unit="cm"):
     results_dir = os.path.dirname(os.path.abspath(results_path))
     if results_dir:
         os.makedirs(results_dir, exist_ok=True)
     with open(results_path, "w", newline="") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=COMPACT_RESULTS_FIELDNAMES)
+        writer = csv.DictWriter(
+            csvfile,
+            fieldnames=compact_results_fieldnames(results_unit),
+        )
         writer.writeheader()
-        writer.writerows(compact_measurement_row(row) for row in result_rows)
+        writer.writerows(
+            compact_measurement_row(row, results_unit) for row in result_rows
+        )
 
 
 def default_worker_count(input_images, output_mode, mask_method):
@@ -1115,6 +1130,7 @@ def run_leaf_morpho_batch(
     worker_safety_check=False,
     break_glass_acknowledged=False,
     birefnet_parallel_acknowledged=False,
+    results_unit="cm",
 ):
     """Run the leaf morphometrics pipeline with per-image error isolation.
 
@@ -1129,6 +1145,7 @@ def run_leaf_morpho_batch(
     input_images = list(input_images or [])
     if execution_device not in {"auto", "cpu", "hybrid"}:
         raise ValueError("execution_device must be 'auto', 'cpu', or 'hybrid'")
+    validate_results_unit(results_unit)
     if execution_device == "hybrid" and mask_method != "threshold":
         raise ValueError("hybrid execution is currently supported for Otsu thresholding only")
     if output_dir is not False:
@@ -1211,9 +1228,14 @@ def run_leaf_morpho_batch(
         processed += 1
         if results_path and processed % csv_update_interval == 0:
             if compact_csv:
-                write_compact_results_csv(result_rows, results_path)
+                write_compact_results_csv(result_rows, results_path, results_unit)
             else:
-                write_results_csv(result_rows, results_path, qr_backend_fields)
+                write_results_csv(
+                    result_rows,
+                    results_path,
+                    qr_backend_fields,
+                    results_unit,
+                )
         if progress_callback is not None:
             progress_callback({
                 "processed": processed,
@@ -1268,9 +1290,14 @@ def run_leaf_morpho_batch(
 
     if results_path:
         if compact_csv:
-            write_compact_results_csv(result_rows, results_path)
+            write_compact_results_csv(result_rows, results_path, results_unit)
         else:
-            write_results_csv(result_rows, results_path, qr_backend_fields)
+            write_results_csv(
+                result_rows,
+                results_path,
+                qr_backend_fields,
+                results_unit,
+            )
 
     failure_report_path = None
     if write_failures:
@@ -1285,7 +1312,10 @@ def run_leaf_morpho_batch(
         "failure_report_path": failure_report_path,
         "failure_rows": failure_rows,
         "result_rows": result_rows,
-        "compact_rows": [compact_measurement_row(row) for row in result_rows],
+        "compact_rows": [
+            compact_measurement_row(row, results_unit) for row in result_rows
+        ],
+        "results_unit": results_unit,
         "qr_backend_fields": qr_backend_fields,
         "workers": workers,
         "worker_reason": worker_reason,

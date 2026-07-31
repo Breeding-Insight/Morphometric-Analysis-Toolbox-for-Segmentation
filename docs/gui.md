@@ -38,9 +38,11 @@ guide, and the results-CSV glossary).
 3. Choose a **segmentation method**: *Classic thresholding (Otsu)* (fast, default; best
    on clean backgrounds) or *BiRefNet* (more accurate on cluttered backgrounds;
    uses a GPU when available; needs its optional ~2.65 GB local checkpoint).
-4. Choose **output options**: pick the **Full research schema** CSV for area/width/length
-   plus per-axis `px_per_cm_width`/`px_per_cm_height` and a `scale_aspect_ratio`
-   QC column, or **Compact** for a trimmed export. In **Variable dimensions** mode,
+4. Choose **output options**: choose whether measurements should be shown and exported in
+   **mm**, **cm**, or **in** (this is separate from the printed-sheet calibration unit),
+   then pick the **Full research schema** CSV for area/width/length plus per-axis
+   pixels-per-selected-unit and a `scale_aspect_ratio` QC column, or **Compact** for a
+   trimmed export. In **Variable dimensions** mode,
    the Full schema also records each installed QR decoder's outcome (`success`,
    `failed`, or `unused`). Optionally write a failures log.
 5. **CPU Options** retains the worker controls. The app detects the CPU workers assigned to it (including HPC

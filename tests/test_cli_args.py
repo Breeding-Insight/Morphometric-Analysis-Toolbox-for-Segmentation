@@ -34,6 +34,7 @@ def test_run_defaults():
     assert ns.mask_method == "threshold"
     assert ns.threshold_level == "auto"
     assert ns.csv_schema == "full"        # research schema by default
+    assert ns.results_unit == "cm"
     assert ns.save_axes is False
     assert ns.sheet_dimensions is None
     assert ns.template_dimensions is None
@@ -51,6 +52,11 @@ def test_compact_and_axes_opt_in():
     ns = build_parser().parse_args(["run", "-i", "x", "--csv-schema", "compact", "--save-axes"])
     assert ns.csv_schema == "compact"
     assert ns.save_axes is True
+
+
+def test_results_unit_accepts_supported_choices():
+    ns = build_parser().parse_args(["run", "-i", "x", "--results-unit", "in"])
+    assert ns.results_unit == "in"
 
 
 def test_invalid_choice_rejected():

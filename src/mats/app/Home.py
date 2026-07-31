@@ -19,7 +19,7 @@ from mats.app.compute import (
 from mats.app.folder_picker import FolderPickerError, choose_folder
 from mats.app.runtime_paths import current_python, display_path
 from mats.qr_runtime import qr_preflight_status, qr_runtime_status
-from mats.scaling import QR_TRACE_FIELDNAMES
+from mats.scaling import DEFAULT_RESULTS_UNIT, QR_TRACE_FIELDNAMES, RESULT_UNITS
 from mats.template_layout import (
     TemplateLayoutError,
     build_template_layout,
@@ -43,11 +43,22 @@ INPUT_SOURCE_KEY = "input_source"
 SEGMENTATION_METHOD_KEY = "segmentation_method"
 THRESHOLD_LEVEL_KEY = "threshold_level"
 RESULTS_SCHEMA_KEY = "results_schema"
+RESULTS_UNIT_KEY = "results_unit"
 WRITE_FAILURES_KEY = "write_failures"
 WORKSPACE_TAB_KEY = "analysis_workspace_tab"
 PENDING_WORKSPACE_TAB_KEY = "pending_analysis_workspace_tab"
 RESULTS_DASHBOARD_MAX_ROWS = 5_000
 RESULTS_TABLE_MAX_ROWS = 1_000
+RESULTS_UNIT_LABELS = {
+    "mm": "Millimeters",
+    "cm": "Centimeters",
+    "in": "Inches",
+}
+RESULTS_UNIT_SYMBOLS = {
+    "mm": "mm",
+    "cm": "cm",
+    "in": "in",
+}
 
 _WORKBENCH_STYLES = """
 <style>
@@ -305,20 +316,31 @@ def read_results_dataframe(results_path, modified_ns, limit):
     return pd.read_csv(results_path, nrows=limit)
 
 
-def normalize_measurements(frame):
+def normalize_measurements(frame, results_unit=DEFAULT_RESULTS_UNIT):
     """Return numeric, consistently named measurements from either CSV schema."""
+    if results_unit not in RESULT_UNITS:
+        results_unit = DEFAULT_RESULTS_UNIT
+    full_area = f"leaf_area_{results_unit}2"
+    compact_area = f"area_{results_unit}2"
+    width = f"width_{results_unit}"
+    length = f"length_{results_unit}"
     measurements = frame.copy()
-    if "leaf_area_cm2" not in measurements and "area_cm2" in measurements:
-        measurements["leaf_area_cm2"] = measurements["area_cm2"]
+    if full_area not in measurements and compact_area in measurements:
+        measurements[full_area] = measurements[compact_area]
 
-    required_columns = ("sample_id", "leaf_area_cm2", "width_cm", "length_cm")
+    required_columns = ("sample_id", full_area, width, length)
     if any(column not in measurements for column in required_columns):
-        return pd.DataFrame(columns=required_columns)
+        return pd.DataFrame(columns=("sample_id", "leaf_area", "width", "length"))
 
-    for column in ("leaf_area_cm2", "width_cm", "length_cm", "scale_aspect_ratio"):
+    measurements = measurements.rename(columns={
+        full_area: "leaf_area",
+        width: "width",
+        length: "length",
+    })
+    for column in ("leaf_area", "width", "length", "scale_aspect_ratio"):
         if column in measurements:
             measurements[column] = pd.to_numeric(measurements[column], errors="coerce")
-    return measurements.dropna(subset=("leaf_area_cm2", "width_cm", "length_cm"))
+    return measurements.dropna(subset=("leaf_area", "width", "length"))
 
 
 def summarize_measurements(measurements):
@@ -327,9 +349,9 @@ def summarize_measurements(measurements):
         return None
     return {
         "count": len(measurements),
-        "median_area_cm2": measurements["leaf_area_cm2"].median(),
-        "median_width_cm": measurements["width_cm"].median(),
-        "median_length_cm": measurements["length_cm"].median(),
+        "median_area": measurements["leaf_area"].median(),
+        "median_width": measurements["width"].median(),
+        "median_length": measurements["length"].median(),
     }
 
 
@@ -760,7 +782,19 @@ def render_analysis_settings(lm):
 
     with st.container(border=True):
         st.markdown("**3 · Measurement Output**")
-        st.caption("Choose the export schema and whether to keep a per-image failure report.")
+        st.caption("Choose result units, the export schema, and whether to keep a per-image failure report.")
+        st.segmented_control(
+            "Result units",
+            options=list(RESULT_UNITS),
+            format_func=RESULTS_UNIT_LABELS.get,
+            required=True,
+            key=RESULTS_UNIT_KEY,
+            help=(
+                "Controls the measurements shown in Results and written to the CSV. "
+                "It does not change the printed-sheet calibration dimensions."
+            ),
+            persist_state="page",
+        )
         schema_column, failures_column = st.columns((1.35, 0.65), vertical_alignment="bottom")
         with schema_column:
             st.selectbox(
@@ -771,7 +805,7 @@ def render_analysis_settings(lm):
                 ],
                 key=RESULTS_SCHEMA_KEY,
                 help=(
-                    "Full adds px_per_cm_width, px_per_cm_height, and scale_aspect_ratio "
+                    "Full adds per-axis pixels-per-unit columns and scale_aspect_ratio "
                     "for QC. Compact is the trimmed UI export."
                 ),
                 persist_state="page",
@@ -829,6 +863,7 @@ def current_analysis_config(lm):
             else lm.BIREFNET_THRESHOLD
         ),
         "compact_csv": st.session_state[RESULTS_SCHEMA_KEY].startswith("Compact"),
+        "results_unit": st.session_state[RESULTS_UNIT_KEY],
         "write_failures": st.session_state[WRITE_FAILURES_KEY],
         "use_qr": use_qr,
         "use_legacy_dimensions": use_legacy_dimensions,
@@ -1340,6 +1375,7 @@ def execute_leaf_analysis(
                     progress_callback=update_progress,
                     write_failures=config["write_failures"],
                     compact_csv=config["compact_csv"],
+                    results_unit=config["results_unit"],
                     save_measurement_axes=False,
                 )
         except ValueError as exc:
@@ -1372,6 +1408,7 @@ def main():
         RESULTS_SCHEMA_KEY,
         "Full research schema (area/width/length + px-per-cm)",
     )
+    st.session_state.setdefault(RESULTS_UNIT_KEY, DEFAULT_RESULTS_UNIT)
     st.session_state.setdefault(WRITE_FAILURES_KEY, True)
     st.session_state.setdefault(INPUT_DIR_KEY, str(DEFAULT_INPUT_DIR))
     st.session_state.setdefault(OUTPUT_DIR_KEY, str(DEFAULT_OUTPUT_DIR))
@@ -1496,6 +1533,7 @@ def main():
                 "results_path": str(results_path),
                 "output_path": str(output_path),
                 "mask_method": config["mask_method"],
+                "results_unit": config["results_unit"],
             }
             st.session_state["viewer_pairs"] = merge_viewer_pairs(
                 st.session_state["viewer_pairs"],
@@ -1527,6 +1565,11 @@ def render_results(lm):
 
     results_path = Path(run["results_path"])
     output_path = Path(run["output_path"])
+    results_unit = run.get("results_unit", DEFAULT_RESULTS_UNIT)
+    if results_unit not in RESULT_UNITS:
+        results_unit = DEFAULT_RESULTS_UNIT
+    unit_symbol = RESULTS_UNIT_SYMBOLS[results_unit]
+    area_symbol = f"{unit_symbol}²"
     st.subheader("Results", anchor=False)
     st.success(
         f"Completed {run['succeeded']} measurement(s); {run['failed']} failed "
@@ -1569,7 +1612,7 @@ def render_results(lm):
         st.error(f"Could not read the results CSV: {exc}")
         return
 
-    measurements = normalize_measurements(frame)
+    measurements = normalize_measurements(frame, results_unit)
     if measurements.empty:
         st.warning(
             "The CSV contains no complete area, width, and length measurements to visualize.",
@@ -1587,17 +1630,17 @@ def render_results(lm):
             )
             st.metric(
                 "Median leaf area",
-                f"{summary['median_area_cm2']:.2f} cm²",
+                f"{summary['median_area']:.2f} {area_symbol}",
                 border=True,
             )
             st.metric(
                 "Median leaf width",
-                f"{summary['median_width_cm']:.2f} cm",
+                f"{summary['median_width']:.2f} {unit_symbol}",
                 border=True,
             )
             st.metric(
                 "Median leaf length",
-                f"{summary['median_length_cm']:.2f} cm",
+                f"{summary['median_length']:.2f} {unit_symbol}",
                 border=True,
             )
 
@@ -1614,23 +1657,23 @@ def render_results(lm):
                 alt.Chart(measurements)
                 .mark_circle(opacity=0.75)
                 .encode(
-                    x=alt.X("width_cm:Q", title="Leaf width (cm)"),
-                    y=alt.Y("length_cm:Q", title="Leaf length (cm)"),
+                    x=alt.X("width:Q", title=f"Leaf width ({unit_symbol})"),
+                    y=alt.Y("length:Q", title=f"Leaf length ({unit_symbol})"),
                     size=alt.Size(
-                        "leaf_area_cm2:Q",
-                        title="Leaf area (cm²)",
+                        "leaf_area:Q",
+                        title=f"Leaf area ({area_symbol})",
                         scale=alt.Scale(range=[30, 900]),
                     ),
                     color=alt.Color(
-                        "leaf_area_cm2:Q",
-                        title="Leaf area (cm²)",
+                        "leaf_area:Q",
+                        title=f"Leaf area ({area_symbol})",
                         scale=alt.Scale(scheme="blues"),
                     ),
                     tooltip=[
                         alt.Tooltip("sample_id:N", title="Sample"),
-                        alt.Tooltip("leaf_area_cm2:Q", title="Area (cm²)", format=".2f"),
-                        alt.Tooltip("width_cm:Q", title="Width (cm)", format=".2f"),
-                        alt.Tooltip("length_cm:Q", title="Length (cm)", format=".2f"),
+                        alt.Tooltip("leaf_area:Q", title=f"Area ({area_symbol})", format=".2f"),
+                        alt.Tooltip("width:Q", title=f"Width ({unit_symbol})", format=".2f"),
+                        alt.Tooltip("length:Q", title=f"Length ({unit_symbol})", format=".2f"),
                     ],
                 )
                 .interactive()
@@ -1644,9 +1687,9 @@ def render_results(lm):
                 .mark_bar(color="#2c7fb8")
                 .encode(
                     x=alt.X(
-                        "leaf_area_cm2:Q",
+                        "leaf_area:Q",
                         bin=alt.Bin(maxbins=20),
-                        title="Leaf area (cm²)",
+                        title=f"Leaf area ({area_symbol})",
                     ),
                     y=alt.Y("count():Q", title="Leaf count"),
                     tooltip=[
@@ -1706,7 +1749,7 @@ def render_results(lm):
                     height=260,
                 )
 
-        table_columns = ["sample_id", "leaf_area_cm2", "width_cm", "length_cm"]
+        table_columns = ["sample_id", "leaf_area", "width", "length"]
         if "scale_aspect_ratio" in measurements:
             table_columns.append("scale_aspect_ratio")
         table_data = measurements.loc[:, table_columns].head(RESULTS_TABLE_MAX_ROWS).copy()
@@ -1719,12 +1762,16 @@ def render_results(lm):
                 table_data,
                 column_config={
                     "sample_id": st.column_config.TextColumn("Sample", pinned=True),
-                    "leaf_area_cm2": st.column_config.NumberColumn(
-                        "Leaf area (cm²)",
+                    "leaf_area": st.column_config.NumberColumn(
+                        f"Leaf area ({area_symbol})",
                         format="%.2f",
                     ),
-                    "width_cm": st.column_config.NumberColumn("Leaf width (cm)", format="%.2f"),
-                    "length_cm": st.column_config.NumberColumn("Leaf length (cm)", format="%.2f"),
+                    "width": st.column_config.NumberColumn(
+                        f"Leaf width ({unit_symbol})", format="%.2f"
+                    ),
+                    "length": st.column_config.NumberColumn(
+                        f"Leaf length ({unit_symbol})", format="%.2f"
+                    ),
                     "scale_aspect_ratio": st.column_config.NumberColumn(
                         "Scale axis ratio",
                         format="%.3f",
@@ -1751,9 +1798,15 @@ def render_results(lm):
             str(selected_row["sample_id"]) if selected_row is not None else None
         )
         with inspector_column:
-            render_specimen_inspector(selected_sample_id, selected_row, output_pairs)
+            render_specimen_inspector(
+                selected_sample_id,
+                selected_row,
+                output_pairs,
+                unit_symbol,
+                area_symbol,
+            )
     st.download_button(
-        "Download results CSV",
+        f"Download results CSV ({unit_symbol})",
         data=results_path.read_bytes(),
         file_name=results_path.name,
         mime="text/csv",
@@ -1765,7 +1818,7 @@ def render_results(lm):
     render_zip_export(results_path, output_path)
 
 
-def render_specimen_inspector(sample_id, measurement, pairs):
+def render_specimen_inspector(sample_id, measurement, pairs, unit_symbol="cm", area_symbol="cm²"):
     """Render the selected specimen's measurements beside its generated artifacts."""
     with st.container(border=True):
         st.markdown("**Selected Specimen**")
@@ -1779,9 +1832,9 @@ def render_specimen_inspector(sample_id, measurement, pairs):
         st.badge(sample_id, icon=":material/eco:", color="green")
         if measurement is not None:
             with st.container(horizontal=True):
-                st.metric("Leaf Area", f"{measurement['leaf_area_cm2']:.2f} cm²", border=True)
-                st.metric("Leaf Width", f"{measurement['width_cm']:.2f} cm", border=True)
-                st.metric("Leaf Length", f"{measurement['length_cm']:.2f} cm", border=True)
+                st.metric("Leaf Area", f"{measurement['leaf_area']:.2f} {area_symbol}", border=True)
+                st.metric("Leaf Width", f"{measurement['width']:.2f} {unit_symbol}", border=True)
+                st.metric("Leaf Length", f"{measurement['length']:.2f} {unit_symbol}", border=True)
         pair = find_output_pair(pairs, sample_id)
         if pair is None:
             st.info(

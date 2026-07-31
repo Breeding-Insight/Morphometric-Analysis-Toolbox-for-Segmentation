@@ -294,6 +294,11 @@ st.caption(
 st.subheader("Reading the results CSV", anchor=False)
 with st.container(border=True):
     st.markdown("**Full research schema** (default)")
+    st.caption(
+        "Choose result units in Analyze before running: `mm`, `cm` (the default), "
+        "or `in`. The selected unit appears in every measurement and pixels-per-unit "
+        "column name; the table below shows the default centimeter names."
+    )
     st.markdown(
         "| Column | Meaning |\n"
         "|---|---|\n"
@@ -347,7 +352,8 @@ with st.container(border=True):
     st.markdown(
         "`" + "`, `".join(COMPACT_RESULTS_FIELDNAMES) + "` — a trimmed export "
         "for spreadsheet use. `area_cm2` here is the same quantity as "
-        "`leaf_area_cm2` above; the name differs between schemas."
+        "`leaf_area_cm2` above; the name differs between schemas. With `mm` or `in` "
+        "selected, `cm` is replaced consistently in these column names."
     )
     st.caption(
         "Unmeasurable values are written as the literal `NA`. Also written per "

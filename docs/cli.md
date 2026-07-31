@@ -29,7 +29,8 @@ mats run -i ./images -o ./out -r results.csv --sheet-dimensions 12x12in
 | `--output-mode` | `masks` (segment leaves) or `target-boxes` (only save corrected boxes). | `masks` |
 | `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast). | `threshold` |
 | `--threshold-level` | For `threshold`: `auto` (Otsu), `low` (100), `medium` (125), `high` (150). | `auto` |
-| `--csv-schema` | `full` (area/width/length + per-axis px-per-cm) or `compact`. | `full` |
+| `--csv-schema` | `full` (area/width/length + per-axis pixels-per-selected-unit) or `compact`. | `full` |
+| `--results-unit` | CSV measurement unit: `mm`, `cm`, or `in`. | `cm` |
 | `-w, --workers` | Parallel workers. Only the CPU `threshold` path over pre-made target boxes parallelizes; model-backed runs use one worker. | auto |
 | `--save-axes` | Also write per-image length/width overlay images for QC. | off |
 

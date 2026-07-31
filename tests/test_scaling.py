@@ -13,10 +13,13 @@ from mats.scaling import (
     QR_TRACE_FIELDNAMES,
     RESULTS_FIELDNAMES,
     compact_measurement_row,
+    compact_results_fieldnames,
+    converted_measurement_row,
     full_results_fieldnames,
     measurement_na_row,
     measurement_row,
     px_per_cm_axes,
+    results_fieldnames,
 )
 
 
@@ -113,6 +116,52 @@ def test_full_results_fieldnames_append_only_requested_qr_backends():
     ]
 
 
+@pytest.mark.parametrize(
+    ("unit", "length_factor"),
+    [("mm", 10.0), ("cm", 1.0), ("in", 1.0 / 2.54)],
+)
+def test_converted_measurement_row_uses_selected_length_and_area_units(unit, length_factor):
+    row = measurement_row("leaf01", 310000, 800, 600, 78.74, 74.60)
+    row[QR_TRACE_FIELDNAMES[0]] = "success"
+
+    converted = converted_measurement_row(row, unit)
+
+    assert converted[f"leaf_area_{unit}2"] == pytest.approx(
+        row["leaf_area_cm2"] * length_factor ** 2
+    )
+    assert converted[f"width_{unit}"] == pytest.approx(row["width_cm"] * length_factor)
+    assert converted[f"length_{unit}"] == pytest.approx(row["length_cm"] * length_factor)
+    assert converted[f"px_per_{unit}_width"] == pytest.approx(
+        row["px_per_cm_width"] / length_factor
+    )
+    assert converted[f"px_per_{unit}_height"] == pytest.approx(
+        row["px_per_cm_height"] / length_factor
+    )
+    assert converted[QR_TRACE_FIELDNAMES[0]] == "success"
+
+
+def test_selected_unit_schemas_use_matching_column_names():
+    assert results_fieldnames("mm") == [
+        "sample_id", "leaf_area_mm2", "width_mm", "length_mm",
+        "px_per_mm_width", "px_per_mm_height", "scale_aspect_ratio", "source",
+    ]
+    assert full_results_fieldnames((QR_TRACE_FIELDNAMES[0],), "in") == [
+        "sample_id", "leaf_area_in2", "width_in", "length_in",
+        "px_per_in_width", "px_per_in_height", "scale_aspect_ratio", "source",
+        QR_TRACE_FIELDNAMES[0],
+    ]
+    assert compact_results_fieldnames("in") == [
+        "sample_id", "area_in2", "width_in", "length_in",
+    ]
+
+
+def test_converted_measurement_row_preserves_na_values():
+    converted = converted_measurement_row(measurement_na_row("leaf01", "failed"), "mm")
+    assert converted["leaf_area_mm2"] == NA_VALUE
+    assert converted["width_mm"] == NA_VALUE
+    assert converted["px_per_mm_width"] == NA_VALUE
+
+
 def test_compact_measurement_row_maps_fields():
     row = measurement_row("leaf01", 310000, 800, 600, 78.74, 74.60)
     compact = compact_measurement_row(row)
@@ -133,4 +182,15 @@ def test_compact_measurement_row_na_passthrough():
         "area_cm2": NA_VALUE,
         "width_cm": NA_VALUE,
         "length_cm": NA_VALUE,
+    }
+
+
+def test_compact_measurement_row_uses_selected_unit():
+    row = measurement_row("leaf01", 310000, 800, 600, 78.74, 74.60)
+    compact = compact_measurement_row(row, "in")
+    assert compact == {
+        "sample_id": "leaf01",
+        "area_in2": pytest.approx(row["leaf_area_cm2"] / 2.54 ** 2),
+        "width_in": pytest.approx(row["width_cm"] / 2.54),
+        "length_in": pytest.approx(row["length_cm"] / 2.54),
     }
