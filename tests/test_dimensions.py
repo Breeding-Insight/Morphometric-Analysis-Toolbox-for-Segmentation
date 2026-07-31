@@ -19,6 +19,8 @@ from mats.dimensions import parse_template_dimensions
         ("12X12IN", (12.0, 12.0, "in")),          # case-insensitive
         ("  10x8cm  ", (10.0, 8.0, "cm")),         # surrounding whitespace
         ("10.5 x 9.5in", (10.5, 9.5, "in")),       # spaces around the x
+        ("6inx6in", (6.0, 6.0, "in")),             # unit repeated after width
+        ("12in x 12in", (12.0, 12.0, "in")),       # unit on both, agreeing
     ],
 )
 def test_valid(text, expected):
@@ -31,10 +33,10 @@ def test_valid(text, expected):
         None,
         "",
         "12x12",           # no unit
-        "12in x 12in",     # unit on both, wrong shape
         "12x12mm",         # unsupported unit
         "12by12in",        # wrong separator
         "axbin",           # non-numeric
+        "6cmx6in",         # unit on both, disagreeing -- ambiguous, not guessed at
     ],
 )
 def test_invalid(text):

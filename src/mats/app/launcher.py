@@ -16,7 +16,9 @@ def launch(extra_args=None):
     cmd = [sys.executable, "-m", "streamlit", "run", str(entry)]
     if extra_args:
         cmd.extend(extra_args)
-    return subprocess.call(cmd)
+    # Keep the packaged Streamlit theme discoverable even when `mats app` is
+    # launched from a data directory, a scheduler job, or another project.
+    return subprocess.call(cmd, cwd=entry.parent)
 
 
 if __name__ == "__main__":

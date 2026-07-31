@@ -1,13 +1,23 @@
 # Sample images
 
-Drop 3–5 small example photos here (leaves on a printed template) so the
-quickstart is runnable out of the box:
+The example photographs now ship **inside the package** rather than in this
+folder, so `pip install mats-morpho` gives you runnable samples with no
+checkout, and the repository does not carry two copies of the same binaries.
+
+Find them:
 
 ```bash
-mats run -i examples/sample_images -o /tmp/mats_demo -t 10.5x9.5in
+python -c "from mats import samples; print(samples.SAMPLES_DIR)"
 ```
 
-Keep each image well under ~1 MB (downscale if needed) so the repo stays light.
-Use images you have the right to publish.
+Or open the **Help** page in the app (`mats app`), which displays them with
+annotations and offers a ZIP download.
 
-> TODO(release): add the sample images and delete this note.
+Two legacy-template sets, each with its own marker-centre calibration area:
+
+```bash
+mats run -i <samples>/flat_bench_6x6in          -o /tmp/mats_demo -t 6x6in
+mats run -i <samples>/handheld_field_10.5x9.5in -o /tmp/mats_demo -t 10.5x9.5in
+```
+
+Source, processing, and license: `src/mats/app/assets/samples/README.md`.

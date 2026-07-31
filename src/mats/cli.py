@@ -48,9 +48,16 @@ def build_parser():
                      help='Path for the measurement CSV (default: ./leaf_morpho_results.csv).')
     run.add_argument('-w', '--workers', default=None, type=int,
                      help='Number of worker processes; overrides the automatic GPU-safe default.')
-    run.add_argument('-t', '--template_dimensions', '--template-dimensions', dest='template_dimensions',
-                     type=str, default=None,
-                     help='Physical template size as <width>x<height><unit>, e.g. 10.5x9.5in or 27x24cm.')
+    dimensions = run.add_mutually_exclusive_group()
+    dimensions.add_argument(
+        '--sheet-dimensions', dest='sheet_dimensions', type=str, default=None,
+        help='Finished Template Creator sheet size as <width>x<height><unit>, e.g. 12x12in or 30x30cm.'
+    )
+    dimensions.add_argument(
+        '-t', '--template_dimensions', '--template-dimensions', dest='template_dimensions',
+        type=str, default=None,
+        help='Legacy/custom marker-centre calibration area as <width>x<height><unit>.'
+    )
     run.add_argument('--output-mode', choices=('masks', 'target-boxes'), default='masks',
                      help='Produce segmentation masks, or only perspective-corrected target boxes.')
     run.add_argument('--mask-method', choices=('threshold', 'birefnet'), default='threshold',
@@ -117,19 +124,39 @@ def _print_run_banner(args, threshold_value):
 
 
 def _resolve_template_dims(args, lm):
+    if args.sheet_dimensions is not None:
+        from .template_layout import TemplateLayoutError, build_template_layout
+
+        dims = lm.parse_template_dimensions(args.sheet_dimensions)
+        if dims is None:
+            _fail('--sheet-dimensions must look like "12x12in" or "30x30cm"')
+        try:
+            layout = build_template_layout(*dims)
+        except TemplateLayoutError as exc:
+            _fail(f"invalid --sheet-dimensions: {exc}")
+        print(
+            "\nPrinted sheet size provided: "
+            f"{layout.page_width:g}x{layout.page_length:g}{layout.unit}; "
+            "derived marker-centre calibration area: "
+            f"{layout.observation_width:g}x{layout.observation_length:g}{layout.unit}"
+        )
+        return layout.calibration_dimensions
+
     if args.template_dimensions is None:
-        print("\nNo template dimensions provided; will read size/orientation from QR when available.")
+        print("\nNo sheet dimensions provided; will read calibration from QR when available.")
         return None
     dims = lm.parse_template_dimensions(args.template_dimensions)
     while dims is None:
         if not sys.stdin.isatty():
-            _fail("--template_dimensions must look like 10.5x9.5in or 27x24cm")
-        print("\nTemplate dimensions must use the format <width>x<height><unit> "
+            _fail("legacy --template-dimensions must look like 10.5x9.5in or 27x24cm")
+        print("\nLegacy calibration dimensions must use <width>x<height><unit> "
               "(e.g., 10.5x9.5in or 27x24cm).")
-        args.template_dimensions = input("Please re-enter the template dimensions: ")
+        args.template_dimensions = input("Please re-enter the legacy calibration area: ")
         dims = lm.parse_template_dimensions(args.template_dimensions)
     w, h, u = dims
-    print(f"\nTemplate dimensions provided: width={w}{u}, height={h}{u}")
+    print(
+        f"\nLegacy/custom calibration area provided: width={w}{u}, height={h}{u}"
+    )
     return dims
 
 

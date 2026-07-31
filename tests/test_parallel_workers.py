@@ -26,7 +26,7 @@ def test_parallel_cpu_policy_allows_model_backed_workers(monkeypatch, tmp_path):
     seen_devices = []
 
     def fake_process(*args):
-        seen_devices.append(args[-1])
+        seen_devices.append(args[-2])
         return _result_for(args[0])
 
     monkeypatch.setattr(core, "_process_batch_image", fake_process)
@@ -48,7 +48,7 @@ def test_auto_device_policy_keeps_model_backed_runs_serialized(monkeypatch, tmp_
     seen_devices = []
 
     def fake_process(*args):
-        seen_devices.append(args[-1])
+        seen_devices.append(args[-2])
         return _result_for(args[0])
 
     monkeypatch.setattr(core, "_process_batch_image", fake_process)
@@ -69,7 +69,7 @@ def test_hybrid_otsu_policy_keeps_gpu_rfdetr_and_cpu_fanout(monkeypatch, tmp_pat
     seen_devices = []
 
     def fake_process(*args):
-        seen_devices.append(args[-1])
+        seen_devices.append(args[-2])
         return _result_for(args[0])
 
     monkeypatch.setattr(core, "_process_batch_image", fake_process)
@@ -166,7 +166,7 @@ def test_worker_safety_check_allows_acknowledged_high_risk_count(monkeypatch, tm
     monkeypatch.setattr(core, "available_cpu_workers", lambda: 8)
 
     def fake_process(*args):
-        seen_devices.append(args[-1])
+        seen_devices.append(args[-2])
         return _result_for(args[0])
 
     monkeypatch.setattr(core, "_process_batch_image", fake_process)

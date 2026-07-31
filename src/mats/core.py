@@ -52,6 +52,7 @@ from .scaling import (
     RESULTS_FIELDNAMES,
     COMPACT_RESULTS_FIELDNAMES,
     NA_VALUE,
+    full_results_fieldnames,
     px_per_cm_axes,
     measurement_na_row,
     measurement_row,
@@ -291,7 +292,10 @@ def _get_qreader():
     if _QReader is None:
         return None
     if _qreader_instance is None:
-        _qreader_instance = _QReader()
+        try:
+            _qreader_instance = _QReader()
+        except Exception:  # pragma: no cover - depends on optional model/runtime state
+            return None
     return _qreader_instance
 
 
@@ -300,45 +304,96 @@ def _enhanced_qr_available():
     return _pyzbar_decode is not None or _QReader is not None
 
 
-def three_pronged_qr(gray_img):
-    # Save retval
+def available_qr_backend_fields():
+    """Return trace columns for QR decoders usable in this Python process."""
+    fields = ["qr_opencv"]
+    if _pyzbar_decode is not None:
+        fields.append("qr_pyzbar_zbar")
+    if _QReader is not None:
+        fields.append("qr_qreader")
+    return tuple(fields)
+
+
+def _three_pronged_qr_with_trace(gray_img, backend_fields=None):
+    """Decode a QR code and record every available fallback's outcome."""
+    backend_fields = (
+        available_qr_backend_fields() if backend_fields is None else tuple(backend_fields)
+    )
+    trace = {field: "unused" for field in backend_fields}
     retval = False
     readby = "FAIL"
+
     # First attempt with OpenCV -- always available, the lightweight default.
     qcd = cv2.QRCodeDetector()
-    retval, decoded_info, points, _straight_qrcode = qcd.detectAndDecodeMulti(gray_img)
+    try:
+        retval, decoded_info, points, _straight_qrcode = qcd.detectAndDecodeMulti(gray_img)
+    except Exception:  # pragma: no cover - OpenCV runtime failure
+        retval, decoded_info, points = False, None, None
+    if "qr_opencv" in trace:
+        trace["qr_opencv"] = "success" if retval else "failed"
     if retval:
         points = points.squeeze().astype(np.int64)
         readby = "OpenCV"
-        return retval, decoded_info, points, readby
+        return retval, decoded_info, points, readby, trace
 
     # Enhanced backends (optional "mats-morpho[qr]" extra). If OpenCV fails and
     # pyzbar is installed, try it next.
-    if _pyzbar_decode is not None:
-        decoded_objects = _pyzbar_decode(gray_img)
+    if "qr_pyzbar_zbar" in trace:
+        try:
+            decoded_objects = _pyzbar_decode(gray_img)
+        except Exception:  # pragma: no cover - optional native decoder failure
+            decoded_objects = ()
         if decoded_objects:
             for obj in decoded_objects:
-                decoded_info = obj.data.decode("utf-8")
-                points = np.array([[p.x, p.y] for p in obj.polygon])
+                try:
+                    decoded_info = obj.data.decode("utf-8")
+                    points = np.array([[p.x, p.y] for p in obj.polygon])
+                except (AttributeError, UnicodeDecodeError):
+                    continue
                 retval = True
                 readby = "pyzbar"
-                return retval, decoded_info, points, readby
+                trace["qr_pyzbar_zbar"] = "success"
+                return retval, decoded_info, points, readby, trace
+        trace["qr_pyzbar_zbar"] = "failed"
 
     # If pyzbar fails or is unavailable, try qreader when it's installed.
-    _qr = _get_qreader()
+    if "qr_qreader" in trace:
+        _qr = _get_qreader()
+    else:
+        _qr = None
     if _qr is not None:
-        decoded_info = _qr.detect_and_decode(image=gray_img)
-        decoded_info = decoded_info[0]
-        decoded_list = _qr.detect(image=gray_img)
-        if decoded_list:
-            quad_xy_list = [info['quad_xy'] for info in decoded_list]
-            points = np.array(quad_xy_list).astype(np.int64).squeeze()
+        try:
+            decoded_values = _qr.detect_and_decode(image=gray_img) or ()
+            decoded_list = _qr.detect(image=gray_img) or ()
+        except Exception:  # pragma: no cover - optional model/runtime failure
+            decoded_values = ()
+            decoded_list = ()
+        if isinstance(decoded_values, str):
+            decoded_values = (decoded_values,)
+        for decoded_info, detected in zip(decoded_values, decoded_list):
+            if not decoded_info or not isinstance(detected, dict):
+                continue
+            points = detected.get("quad_xy")
+            if points is None:
+                continue
+            try:
+                points = np.asarray(points).astype(np.int64).squeeze()
+            except (TypeError, ValueError):
+                continue
             retval = True
             readby = "qreader"
-            return retval, decoded_info, points, readby
+            trace["qr_qreader"] = "success"
+            return retval, decoded_info, points, readby, trace
+    if "qr_qreader" in trace:
+        trace["qr_qreader"] = "failed"
 
-    if not retval:
-        return retval, None, None, readby
+    return retval, None, None, readby, trace
+
+
+def three_pronged_qr(gray_img):
+    """Return the legacy four-value QR decode result without trace details."""
+    retval, decoded_info, points, readby, _trace = _three_pronged_qr_with_trace(gray_img)
+    return retval, decoded_info, points, readby
 
 # Order markers in clockwise order, starting with top left
 def order_points_clockwise(pts):
@@ -627,12 +682,15 @@ def measurement_row_from_mask(
     return measurement_row(sample_id, white_pixels, w, h, px_per_cm_width, px_per_cm_height)
 
 
-def write_results_csv(result_rows, results_path):
+def write_results_csv(result_rows, results_path, qr_backend_fields=()):
     results_dir = os.path.dirname(os.path.abspath(results_path))
     if results_dir:
         os.makedirs(results_dir, exist_ok=True)
     with open(results_path, "w", newline="") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=RESULTS_FIELDNAMES)
+        writer = csv.DictWriter(
+            csvfile,
+            fieldnames=full_results_fieldnames(qr_backend_fields),
+        )
         writer.writeheader()
         writer.writerows(result_rows)
 
@@ -733,6 +791,7 @@ def leaf_morpho(
     threshold_value=THRESHOLD_LEVELS["medium"],
     save_measurement_axes=True,
     execution_device="auto",
+    qr_backend_fields=None,
 ):
     if execution_device not in {"auto", "cpu", "hybrid"}:
         raise ValueError("execution_device must be 'auto', 'cpu', or 'hybrid'")
@@ -745,16 +804,33 @@ def leaf_morpho(
     else:
         file_name = os.path.splitext(os.path.basename(input_image))[0]
 
+    if qr_backend_fields is None:
+        qr_backend_fields = (
+            available_qr_backend_fields() if template_dimensions is None else ()
+        )
+    else:
+        qr_backend_fields = tuple(qr_backend_fields)
+    qr_trace = {field: "not_reached" for field in qr_backend_fields}
+
+    def _with_qr_trace(result_row):
+        if not qr_trace:
+            return result_row
+        return {**result_row, **qr_trace}
+
     def _fail(stage: str, msg: str):
         status = f'{stage}: {msg}'
         return {
             'sample_id': file_name,
             'status': status,
-            'result_row': measurement_na_row(file_name, status),
+            'result_row': _with_qr_trace(measurement_na_row(file_name, status)),
         }
 
     def _ok(result_row, warnings=None):
-        result = {'sample_id': file_name, 'status': 'ok', 'result_row': result_row}
+        result = {
+            'sample_id': file_name,
+            'status': 'ok',
+            'result_row': _with_qr_trace(result_row),
+        }
         if warnings:
             result['warnings'] = warnings
         return result
@@ -793,14 +869,17 @@ def leaf_morpho(
 
             if template_dimensions is None:
                 return _ok(
-                    measurement_na_row(file_name, "SCALE: target_box input requires --template_dimensions"),
+                    measurement_na_row(
+                        file_name,
+                        "SCALE: target_box input requires --sheet-dimensions or legacy --template-dimensions",
+                    ),
                     warnings,
                 )
 
             width, height, unit = template_dimensions
             scale_axes = px_per_cm_axes(target_box.shape[:2], width, height, unit)
             if scale_axes is None:
-                return _ok(measurement_na_row(file_name, "SCALE: invalid template dimensions"))
+                return _ok(measurement_na_row(file_name, "SCALE: invalid calibration dimensions"))
 
             return _ok(
                 measurement_row_from_mask(
@@ -816,7 +895,7 @@ def leaf_morpho(
         # Convert the image to grayscale (either masked or full)
         gray_img = cv2.cvtColor(masked_img, cv2.COLOR_BGR2GRAY)
 
-        # Dimensions: prefer provided template dimensions; only fall back to QR if not provided.
+        # Calibration: prefer a provided marker-centre area; otherwise read the QR.
         width = height = unit = None
         qr_points = None
         decoded_info = None
@@ -824,14 +903,18 @@ def leaf_morpho(
         if template_dimensions is not None:
             width, height, unit = template_dimensions
         else:
-            # Find the QR code only when no manual template dimensions are supplied.
+            # Find the QR code only when no manual calibration is supplied.
             stage = "QR_READ"
-            retval, decoded_info, qr_points, _readby = three_pronged_qr(gray_img)
+            retval, decoded_info, qr_points, _readby, qr_trace = _three_pronged_qr_with_trace(
+                gray_img,
+                qr_backend_fields,
+            )
 
             # Extract QR elements
             if not retval:
-                hint = ("supply template dimensions (CLI -t, e.g. -t 10.5x9.5in, or in "
-                        "the GUI untick 'Variable dimensions' and enter width/height) "
+                hint = ("supply the printed sheet size (CLI --sheet-dimensions, e.g. "
+                        "--sheet-dimensions 12x12in, or in the GUI untick 'Variable "
+                        "dimensions' and enter the finished sheet size) "
                         "to measure without a QR code")
                 if not _enhanced_qr_available():
                     hint += ('; for tougher codes, install enhanced QR reading:  '
@@ -995,6 +1078,7 @@ def _process_batch_image(
     threshold_value,
     save_measurement_axes,
     execution_device,
+    qr_backend_fields,
 ):
     result = leaf_morpho(
         input_image,
@@ -1007,6 +1091,7 @@ def _process_batch_image(
         threshold_value,
         save_measurement_axes,
         execution_device,
+        qr_backend_fields,
     )
     return input_image, result, None
 
@@ -1048,6 +1133,15 @@ def run_leaf_morpho_batch(
         raise ValueError("hybrid execution is currently supported for Otsu thresholding only")
     if output_dir is not False:
         os.makedirs(output_dir, exist_ok=True)
+
+    # Full QR-mode output records only the backends installed for this run.
+    # Compact CSVs deliberately remain compact, and manual calibration does not
+    # invoke the QR reader at all.
+    qr_backend_fields = (
+        available_qr_backend_fields()
+        if template_dimensions is None and not compact_csv
+        else ()
+    )
 
     if workers is None:
         workers, worker_reason = default_worker_count(input_images, output_mode, mask_method)
@@ -1091,7 +1185,9 @@ def run_leaf_morpho_batch(
             failed += 1
             failure_rows.append(failure_report_row(input_image, exception=exception))
             sample_id = os.path.splitext(os.path.basename(input_image))[0]
-            result_rows.append(measurement_na_row(sample_id, f"EXCEPTION: {exception}"))
+            row = measurement_na_row(sample_id, f"EXCEPTION: {exception}")
+            row.update({field: "not_reached" for field in qr_backend_fields})
+            result_rows.append(row)
         elif result and result.get("result_row"):
             result_rows.append(result["result_row"])
             if result.get("status") == "ok":
@@ -1108,14 +1204,16 @@ def run_leaf_morpho_batch(
                 result={"status": "UNKNOWN: no result returned"},
             ))
             sample_id = os.path.splitext(os.path.basename(input_image))[0]
-            result_rows.append(measurement_na_row(sample_id, "UNKNOWN: no result returned"))
+            row = measurement_na_row(sample_id, "UNKNOWN: no result returned")
+            row.update({field: "not_reached" for field in qr_backend_fields})
+            result_rows.append(row)
 
         processed += 1
         if results_path and processed % csv_update_interval == 0:
             if compact_csv:
                 write_compact_results_csv(result_rows, results_path)
             else:
-                write_results_csv(result_rows, results_path)
+                write_results_csv(result_rows, results_path, qr_backend_fields)
         if progress_callback is not None:
             progress_callback({
                 "processed": processed,
@@ -1137,6 +1235,7 @@ def run_leaf_morpho_batch(
                     threshold_value,
                     save_measurement_axes,
                     execution_device,
+                    qr_backend_fields,
                 )
                 _record_result(input_image, result)
             except Exception as exc:
@@ -1154,6 +1253,7 @@ def run_leaf_morpho_batch(
                     threshold_value,
                     save_measurement_axes,
                     execution_device,
+                    qr_backend_fields,
                 ): input_image
                 for input_image in input_images
             }
@@ -1170,7 +1270,7 @@ def run_leaf_morpho_batch(
         if compact_csv:
             write_compact_results_csv(result_rows, results_path)
         else:
-            write_results_csv(result_rows, results_path)
+            write_results_csv(result_rows, results_path, qr_backend_fields)
 
     failure_report_path = None
     if write_failures:
@@ -1186,6 +1286,7 @@ def run_leaf_morpho_batch(
         "failure_rows": failure_rows,
         "result_rows": result_rows,
         "compact_rows": [compact_measurement_row(row) for row in result_rows],
+        "qr_backend_fields": qr_backend_fields,
         "workers": workers,
         "worker_reason": worker_reason,
         "execution_device": execution_device,

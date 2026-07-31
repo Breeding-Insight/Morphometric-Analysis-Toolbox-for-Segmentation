@@ -20,6 +20,7 @@ def test_default_layout_is_derived_from_print_sheet():
     assert layout.marker_diameter_in == 0.75
     assert layout.observation_width_in == 10
     assert layout.observation_length_in == 9.5
+    assert layout.calibration_dimensions == (10.0, 9.5, "in")
     assert layout.qr_payload == "10x9.5in"
     assert parse_template_dimensions(layout.qr_payload) == (
         layout.observation_width,

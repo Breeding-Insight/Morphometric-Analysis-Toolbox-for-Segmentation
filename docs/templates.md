@@ -19,7 +19,7 @@ and applies the same rounding. The width-to-length ratio cannot exceed
 **1.5:1**. For example, 12 × 8 in is allowed, while 10 × 5 in is not. The app
 reports the minimum acceptable shorter edge when a sheet is too elongated.
 
-The marker-center observation box uses fixed unit-native margins:
+Marker centres use fixed unit-native insets from the sheet edges:
 
 | Unit | Top margin | Other margins |
 | --- | ---: | ---: |
@@ -74,8 +74,8 @@ spacing is changed, the QR payload must be updated to exactly match it.
 
 ## How the QR fits in
 
-The QR encodes the observation-box dimensions. When you don't pass
-`--template_dimensions` (CLI) or leave the field blank (GUI), MATs reads the QR
+The QR encodes the derived marker-centre dimensions. When you don't pass
+`--sheet-dimensions` (CLI) or select **Variable dimensions** (GUI), MATs reads the QR
 to recover the scale automatically. The Template Creator verifies each payload
 round-trips through the pipeline's parser before writing either export, so a
 generated template is always readable. The entered width and length describe

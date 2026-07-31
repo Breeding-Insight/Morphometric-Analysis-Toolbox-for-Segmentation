@@ -311,7 +311,7 @@ def _spread_xml(layout):
         page_left + label_right,
     )
     label_frame = (
-        '<TextFrame Self="label_frame" Name="Template dimensions" '
+        '<TextFrame Self="label_frame" Name="Sheet and calibration information" '
         'ParentStory="story_labels" '
         'PreviousTextFrame="n" NextTextFrame="n" ContentType="TextType" '
         'ItemLayer="layer_annotations" ParentPage="page_mats" '

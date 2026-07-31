@@ -16,7 +16,7 @@ mats doctor          Report weights, devices and QR decoders.
 Measures every image in a folder and writes a CSV.
 
 ```bash
-mats run -i ./images -o ./out -r results.csv -t 10.5x9.5in
+mats run -i ./images -o ./out -r results.csv --sheet-dimensions 12x12in
 ```
 
 | Flag | Description | Default |
@@ -24,7 +24,8 @@ mats run -i ./images -o ./out -r results.csv -t 10.5x9.5in
 | `-i, --input_dir, --input-dir` | Directory of images to analyze. | prompted if omitted (interactive) |
 | `-o, --output_dir, --output-dir` | Directory for masks / target boxes. | prompted if omitted (interactive) |
 | `-r, --results_path, --results-path` | Measurement CSV path. | `./leaf_morpho_results.csv` |
-| `-t, --template_dimensions, --template-dimensions` | Observation-box size as `<w>x<h><unit>`, e.g. `10.5x9.5in` or `27x24cm`. | read from the template QR |
+| `--sheet-dimensions` | Finished Template Creator sheet size as `<w>x<h><unit>`, e.g. `12x12in` or `30x30cm`; MATS derives calibration using Creator margins. | read from QR |
+| `-t, --template_dimensions, --template-dimensions` | Legacy/custom marker-centre calibration area. Retained for existing scripts and non-Creator sheets. | unused |
 | `--output-mode` | `masks` (segment leaves) or `target-boxes` (only save corrected boxes). | `masks` |
 | `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast). | `threshold` |
 | `--threshold-level` | For `threshold`: `auto` (Otsu), `low` (100), `medium` (125), `high` (150). | `auto` |

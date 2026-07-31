@@ -625,19 +625,16 @@ def doctor():
     print(f"torch:              {device.torch_version or 'NOT importable'}")
     print(f"BiRefNet device:    {device.device} ({device.detail})")
 
-    # QR decoding backends. OpenCV is the lightweight default; the optional
-    # "enhanced QR" extra  (pip install "mats-morpho[qr]")  adds the pyzbar and
-    # qreader fallbacks for codes OpenCV can't read.
-    backends = []
-    for mod, label in (("cv2", "opencv"), ("pyzbar.pyzbar", "pyzbar"), ("qreader", "qreader")):
-        try:
-            __import__(mod)
-            backends.append(label)
-        except Exception:
-            pass
-    enhanced = "pyzbar" in backends or "qreader" in backends
-    suffix = "" if enhanced else "  (enhanced QR extra not installed -- OpenCV only)"
-    print(f"QR decoding:        {', '.join(backends) or 'NONE (opencv-python missing)'}{suffix}")
+    from .qr_runtime import qr_runtime_status
+
+    qr_status = qr_runtime_status()
+    backends = [
+        backend.name.lower()
+        for backend in (qr_status.opencv, qr_status.pyzbar, qr_status.qreader)
+        if backend.available
+    ]
+    suffix = "" if qr_status.enhanced_available else "  (OpenCV only)"
+    print(f"QR decoding:        {', '.join(backends) or 'NONE'}{suffix}")
 
     if not all_present:
         print("\nA required weight is missing. Run:  mats fetch-weights")

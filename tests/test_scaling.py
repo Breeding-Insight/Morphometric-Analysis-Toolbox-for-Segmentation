@@ -10,8 +10,10 @@ import pytest
 from mats.scaling import (
     COMPACT_RESULTS_FIELDNAMES,
     NA_VALUE,
+    QR_TRACE_FIELDNAMES,
     RESULTS_FIELDNAMES,
     compact_measurement_row,
+    full_results_fieldnames,
     measurement_na_row,
     measurement_row,
     px_per_cm_axes,
@@ -100,6 +102,15 @@ def test_results_fieldnames_match_row_keys():
     row = measurement_row("s", 100, 10, 10, 1.0, 1.0)
     assert set(row.keys()) == set(RESULTS_FIELDNAMES)
     assert set(measurement_na_row("s", "x").keys()) == set(RESULTS_FIELDNAMES)
+
+
+def test_full_results_fieldnames_append_only_requested_qr_backends():
+    assert full_results_fieldnames() == RESULTS_FIELDNAMES
+    assert full_results_fieldnames((QR_TRACE_FIELDNAMES[0], QR_TRACE_FIELDNAMES[2])) == [
+        *RESULTS_FIELDNAMES,
+        QR_TRACE_FIELDNAMES[0],
+        QR_TRACE_FIELDNAMES[2],
+    ]
 
 
 def test_compact_measurement_row_maps_fields():

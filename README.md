@@ -29,20 +29,25 @@ cd Morphometric-Analysis-Toolbox-for-Segmentation
 pip install -e ".[app]"                  # ".[app]" adds the Streamlit GUI
 ```
 
-**Enhanced QR reading (optional).** OpenCV decodes clean codes reliably; for
-tougher photos (glare, skew, blur) you can add the `pyzbar` + `qreader`
-fallbacks. `pyzbar` needs the system library `zbar`:
+**Robust QR reading (optional).** OpenCV decodes clean codes reliably. For
+tougher photos (glare, skew, blur), add the `pyzbar` + `qreader` fallbacks:
 
 ```bash
 pip install -e ".[app,qr]"
-# then install zbar:  Linux: apt install libzbar0
-#                     macOS: brew install zbar
-#                     conda: conda install -c conda-forge zbar
 ```
 
-If a code can't be read, the pipeline continues — just pass the template size
-manually with `-t` (e.g. `-t 10.5x9.5in`), so enhanced QR is a convenience, not
-a requirement.
+This enables QReader without Conda. To enable the additional `pyzbar`
+fallback, install its native `zbar` library with your existing environment:
+
+```bash
+# Linux: apt install libzbar0
+# macOS: brew install zbar
+# Existing Conda environment only: conda install -c conda-forge zbar
+```
+
+If a code can't be read, the pipeline continues — pass the finished sheet size
+with `--sheet-dimensions` (for example, `--sheet-dimensions 12x12in`), so
+enhanced QR is a convenience rather than a requirement.
 
 Then fetch the model weights once and confirm the environment:
 
@@ -51,6 +56,33 @@ mats fetch-weights      # fetches the ~134 MB RF-DETR checkpoint (mandatory, def
 mats fetch-weights --only birefnet --source lfs # optional: explicitly fetch the ~2.65 GB BiRefNet checkpoint
 mats doctor             # checks weights, GPU/CPU device, QR backends
 ```
+
+### Why the first installation is lightweight
+
+MATS installs in a lightweight **operating configuration** for convenience. The
+standard app includes fast Otsu segmentation and OpenCV's built-in QR reader,
+but it does not automatically download the optional ~2.65 GB BiRefNet
+checkpoint or install the pyzbar/QReader robust-QR fallbacks. The required
+~134 MB RF-DETR marker checkpoint is also fetched explicitly with `mats
+fetch-weights` so installations never hide a model download.
+
+This keeps the initial network and disk footprint predictable, avoids native
+`zbar` failures on managed machines, and works better on HPC systems and
+restricted networks. Start with the standard path, then add only what the
+photographs require:
+
+| Capability | Included initially | Add when needed |
+|---|---|---|
+| Otsu leaf segmentation | Yes | Nothing |
+| Clear QR codes with OpenCV | Yes | Nothing |
+| RF-DETR marker detection | Code included | `mats fetch-weights` |
+| BiRefNet segmentation | No checkpoint | `mats fetch-weights --only birefnet --source lfs` |
+| Robust QR fallbacks | No | `pip install "mats-morpho[app,qr]"` |
+
+QReader can download its detector model when that fallback is first used.
+pyzbar requires the native `zbar` library described above. The app's Preflight
+and setup pages show exactly which readers and checkpoints are available before
+a run.
 
 ---
 
@@ -72,15 +104,21 @@ mats app
 This opens the Streamlit GUI in your browser. From there:
 
 1. **Pick images** — a local folder, or drag-and-drop uploads.
-2. **Set the scale** — enter the printed sheet's width, height, and unit (e.g.
-   `10.5 x 9.5 in`), or tick **Variable dimensions, read QR code** to read it
-   from each image's template QR code automatically.
+2. **Set the scale** — enter the finished printed sheet's width, height, and
+   unit (for example, `12 x 12 in`). MATS applies the Template Creator margin
+   rules and derives the marker-centre calibration area automatically. Or tick
+   **Variable dimensions, read QR code** to read each image's calibration.
 3. **Choose segmentation** — Otsu threshold (fast, default) or BiRefNet (accurate when its optional local checkpoint is installed).
 4. **Choose workers** — the app detects the CPUs assigned to it. One worker uses
    CUDA/MPS when available; two or more workers use parallel CPU processing and
    disable CUDA/MPS for that run. A colored warning light shows CPU allocation;
    counts above 75% require a one-run break-glass acknowledgement.
 5. **Run**, then preview results and download a CSV or a ZIP of masks + boxes.
+
+**Getting oriented.** The app's **Help** page (sidebar) ships three annotated
+sample photographs — including a real QR-read failure that shows why printed
+sheet entry is the most consistent option — a photography checklist, and a glossary
+for every results-CSV column. See [docs/gui.md](docs/gui.md).
 
 **Printing templates.** The app has a **Template Creator** page (in the sidebar)
 that accepts only the finished sheet's width and length, then automatically
@@ -94,7 +132,7 @@ photograph it flat. See [docs/templates.md](docs/templates.md).
 ## Using the command line
 
 ```bash
-mats run -i ./images -o ./out -r results.csv -t 10.5x9.5in
+mats run -i ./images -o ./out -r results.csv --sheet-dimensions 12x12in
 ```
 
 Common options (full reference in [docs/cli.md](docs/cli.md)):
@@ -104,7 +142,8 @@ Common options (full reference in [docs/cli.md](docs/cli.md)):
 | `-i, --input_dir` | Folder of images to measure | prompt |
 | `-o, --output_dir` | Where masks / target boxes are written | prompt |
 | `-r, --results_path` | Measurement CSV path | `./leaf_morpho_results.csv` |
-| `-t, --template_dimensions` | Box size, `<w>x<h><unit>` (else read from QR) | QR fallback |
+| `--sheet-dimensions` | Finished Template Creator sheet size, `<w>x<h><unit>` | read from QR |
+| `-t, --template_dimensions` | Legacy/custom marker-centre calibration area | unused |
 | `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast) | `threshold` |
 | `--threshold-level` | `auto` (Otsu) / `low` / `medium` / `high` | `auto` |
 | `--csv-schema` | `full` (area/width/length + per-axis px-per-cm) or `compact` | `full` |
@@ -131,6 +170,9 @@ Plus a measurements CSV. Two schemas:
 
 - **full** (default, research schema) — `sample_id, leaf_area_cm2, width_cm,
   length_cm, px_per_cm_width, px_per_cm_height, scale_aspect_ratio, source`.
+  When dimensions are read from QR codes, it also appends a trace column for
+  OpenCV and each optional decoder installed locally, showing which decoder
+  succeeded or whether a fallback failed or was unused.
   Scaling is **anisotropic**: the x-extent (`width_cm`) is divided by
   `px_per_cm_width`, the y-extent (`length_cm`) by `px_per_cm_height`, and area
   by their product — each axis calibrated independently against the template,
@@ -200,8 +242,9 @@ detail.
 Run `MATS doctor` first — it reports most of these.
 
 - **QR code not read / measurements need a scale** — the default OpenCV decoder
-  couldn't read the code. Pass the template size manually with `-t` (e.g.
-  `-t 10.5x9.5in`), or add enhanced QR reading: `pip install -e ".[qr]"` plus the
+  couldn't read the code. Pass the finished sheet size with
+  `--sheet-dimensions` (e.g. `--sheet-dimensions 12x12in`), or add enhanced QR
+  reading: `pip install -e ".[qr]"` plus the
   `zbar` system lib (Linux: `apt install libzbar0`; macOS: `brew install zbar`;
   conda: `conda install -c conda-forge zbar`).
 - **CUDA out of memory** (only relevant with `--mask-method birefnet`) — process

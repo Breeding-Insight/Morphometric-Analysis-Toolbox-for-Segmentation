@@ -1,8 +1,17 @@
 """CLI argument parsing -- no pipeline execution, so no torch required."""
 
+from types import SimpleNamespace
+
 import pytest
 
-from mats.cli import build_parser, _normalize_argv, _require_local_birefnet_for_run, _resolve_fetch_only
+from mats.cli import (
+    _normalize_argv,
+    _require_local_birefnet_for_run,
+    _resolve_fetch_only,
+    _resolve_template_dims,
+    build_parser,
+)
+from mats.dimensions import parse_template_dimensions
 
 
 def test_default_subcommand_inserted():
@@ -26,6 +35,8 @@ def test_run_defaults():
     assert ns.threshold_level == "auto"
     assert ns.csv_schema == "full"        # research schema by default
     assert ns.save_axes is False
+    assert ns.sheet_dimensions is None
+    assert ns.template_dimensions is None
 
 
 def test_underscore_and_hyphen_aliases_agree():
@@ -45,6 +56,27 @@ def test_compact_and_axes_opt_in():
 def test_invalid_choice_rejected():
     with pytest.raises(SystemExit):
         build_parser().parse_args(["run", "-i", "x", "--mask-method", "nonsense"])
+
+
+def test_sheet_and_legacy_dimensions_are_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            ["run", "--sheet-dimensions", "12x12in", "-t", "10x9.5in"]
+        )
+
+
+def test_sheet_dimensions_are_converted_to_marker_centre_calibration():
+    args = SimpleNamespace(sheet_dimensions="12x12in", template_dimensions=None)
+    lm = SimpleNamespace(parse_template_dimensions=parse_template_dimensions)
+
+    assert _resolve_template_dims(args, lm) == (10.0, 9.5, "in")
+
+
+def test_legacy_template_dimensions_keep_their_historical_meaning():
+    args = SimpleNamespace(sheet_dimensions=None, template_dimensions="10.5x9.5in")
+    lm = SimpleNamespace(parse_template_dimensions=parse_template_dimensions)
+
+    assert _resolve_template_dims(args, lm) == (10.5, 9.5, "in")
 
 
 def test_local_birefnet_preflight_skips_otsu(monkeypatch):

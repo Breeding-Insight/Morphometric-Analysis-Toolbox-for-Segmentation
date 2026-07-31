@@ -24,8 +24,18 @@ RESULTS_FIELDNAMES = [
     "scale_aspect_ratio",
     "source",
 ]
+QR_TRACE_FIELDNAMES = (
+    "qr_opencv",
+    "qr_pyzbar_zbar",
+    "qr_qreader",
+)
 COMPACT_RESULTS_FIELDNAMES = ["sample_id", "area_cm2", "width_cm", "length_cm"]
 NA_VALUE = "NA"
+
+
+def full_results_fieldnames(qr_backend_fields=()):
+    """Return full-schema columns, optionally including available QR traces."""
+    return [*RESULTS_FIELDNAMES, *qr_backend_fields]
 
 
 def px_per_cm_axes(box_shape, template_width, template_height, unit):
