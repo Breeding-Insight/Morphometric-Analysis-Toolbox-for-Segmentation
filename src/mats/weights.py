@@ -2,17 +2,15 @@
 
 The checkpoints are large (RF-DETR ~134 MB, BiRefNet ~2.65 GB) and are
 delivered through two independent channels, plus a shared-filesystem escape
-hatch -- :mod:`mats.paths` resolves whichever produced a real file:
+hatch -- :mod:`mats.paths` resolves to whichever channel produces a real file:
 
 1. **Hugging Face Hub** -- the default public host. Free, no account needed,
    but unreachable on some institutional networks (notably USDA's).
-2. **Git LFS, in this repository** -- RF-DETR is fetched on every
-   ``git clone`` (mandatory for every run). BiRefNet is committed too, but
-   excluded from the default clone/fetch via ``.lfsconfig``
-   (``lfs.fetchexclude``), so a plain clone stays small; it's pulled
-   explicitly through this module (or the BiRefNet setup page) when needed.
-   This channel exists because Hugging Face is not reachable from every
-   collaborator's network.
+2. **Git LFS** -- By default, MATS will only pull the RF-DETR checkpoint file
+   when fetching weights via ``git-lfs pull``. To pull the larger BiRefNet file,
+   you can run ``mats fetch-weights --only birefnet --source lfs`` or just
+   ``git-lfs pull``. This channel exists because Hugging Face is not reachable
+   from every collaborator's network.
 3. **A shared/mounted filesystem** (e.g. USDA SCINet ``/project``) -- point
    ``MATS_WEIGHTS_DIR`` at it and the weights are read in place, no download,
    for anyone who can mount it.
@@ -207,7 +205,7 @@ def get_weight_status(name):
 
     checkout = _checkout_target(name)
     if checkout is not None and looks_like_lfs_pointer(checkout):
-        detail = "Excluded from `git clone` by design -- fetch it via Git LFS or Hugging Face."
+        detail = "Not yet fetched via Git LFS -- fetch it via the app, `mats fetch-weights --only birefnet` or Hugging Face."
         return WeightStatus(name, checkout, "missing", detail, 0, spec["size_bytes"], sources)
 
     target = _download_target(name)
@@ -233,7 +231,7 @@ def _manual_instructions():
         "    (e.g. a shared SCINet /project path).\n"
         "  - Or set RF_DETR_MARKER_CHECKPOINT / BIREFNET_CHECKPOINT to specific files.\n"
         "  - Or, from a Git checkout with Git LFS installed:\n"
-        "      git lfs pull --include=\"weights/birefnet_leaf.pth\"\n\n"
+        "      git lfs pull\n\n"
         "See docs/weights.md.",
         file=sys.stderr,
     )
@@ -334,8 +332,13 @@ def _emit_lfs_progress(progress_path, progress_callback, fallback_total, last_do
 
 
 def _download_from_lfs(name, progress_callback=None):
-    """Fetch one checkpoint via `git lfs pull --include`, overriding this file's
-    .lfsconfig fetchexclude for just this invocation.
+    """Fetch one checkpoint via Git LFS.
+
+    For BiRefNet, runs a plain ``git lfs pull`` (no flags) so the large
+    checkpoint is fetched without affecting other files.  For all other
+    checkpoints, runs ``git lfs pull --exclude weights/birefnet_leaf.pth``
+    so the 2.65 GB BiRefNet file is never pulled as a side-effect of an
+    unrelated weight update.
 
     Writes into the checkout's weights/ directory -- that's where Git LFS
     smudges content, and it's tier 3 of paths.py's resolution order, so the
@@ -361,6 +364,17 @@ def _download_from_lfs(name, progress_callback=None):
     rel_path = f"weights/{spec['filename']}"
     print(f"Fetching {rel_path} via Git LFS -> {target}")
 
+    # For BiRefNet use a plain `git lfs pull` (no flags) -- without a
+    # fetchexclude in .lfsconfig a bare pull fetches all LFS files, which is
+    # what we want for this explicit opt-in download.
+    # For everything else, exclude the large BiRefNet checkpoint so it is
+    # never pulled as an unintended side-effect.
+    birefnet_rel = f"weights/{_MANIFEST['birefnet']['filename']}"
+    if name == "birefnet":
+        lfs_cmd = ["git", "lfs", "pull"]
+    else:
+        lfs_cmd = ["git", "lfs", "pull", "--exclude", birefnet_rel]
+
     with tempfile.TemporaryDirectory() as tmp:
         progress_path = Path(tmp) / "progress"
         log_path = Path(tmp) / "output.log"
@@ -370,7 +384,7 @@ def _download_from_lfs(name, progress_callback=None):
         # deadlocking the child if it writes enough to fill the OS pipe buffer.
         with open(log_path, "w") as log_file:
             proc = subprocess.Popen(
-                ["git", "lfs", "pull", "--include", rel_path],
+                lfs_cmd,
                 cwd=_REPO_ROOT, env=env,
                 stdout=log_file, stderr=subprocess.STDOUT,
             )
@@ -387,7 +401,8 @@ def _download_from_lfs(name, progress_callback=None):
 
     _emit(progress_callback, "verifying", 0, size)
     if not target.is_file() or looks_like_lfs_pointer(target):
-        print(f"error: {target} is still not a real file after `git lfs pull`.", file=sys.stderr)
+        print(f"error: {target} is still not a real file after `git-lfs pull`.", file=sys.stderr)
+        print(f"Please verify that you have Git LFS configured by running `git-lfs install`.")
         return False
 
     actual_size = target.stat().st_size
@@ -516,12 +531,12 @@ def ensure_weight(name):
             f"{spec['filename']} not found and auto-fetch is disabled "
             f"({_AUTO_FETCH_DISABLED} is set). Pre-stage the weights, or run "
             f"`mats fetch-weights --only {name}` after unsetting {_AUTO_FETCH_DISABLED} "
-            f"(from a Git checkout, `git lfs pull --include=\"weights/{spec['filename']}\"` "
-            f"also works)."
+            f"(from a Git checkout, `git lfs pull` fetches all weights including birefnet, or "
+            f"`git lfs pull --exclude weights/{_MANIFEST['birefnet']['filename']}` fetches all others)."
         )
 
-    # A checkout excludes BiRefNet from the default clone (.lfsconfig); a
-    # pointer stub here means "not yet pulled", not an error -- fetch it.
+    # A pointer stub for BiRefNet means the user hasn't run `git lfs pull`
+    # for it yet (it's large and opt-in) -- fetch it rather than failing.
     checkout = _checkout_target(name)
     if checkout is not None and looks_like_lfs_pointer(checkout) and _download_from_lfs(name):
         return checkout
