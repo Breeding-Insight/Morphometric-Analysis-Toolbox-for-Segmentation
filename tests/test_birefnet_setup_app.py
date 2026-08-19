@@ -5,6 +5,8 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest
 
+from mats import weights
+from mats.app.runtime_paths import display_path
 
 PAGE = Path(__file__).resolve().parents[1] / "src" / "mats" / "app" / "pages" / "2_BiRefNet_Setup.py"
 
@@ -15,6 +17,8 @@ def test_birefnet_setup_page_renders_explicit_lfs_fetch_control():
     assert not app.exception
     assert [title.value for title in app.title] == ["BiRefNet setup"]
     assert app.button[0].label == "Fetch BiRefNet from this repository"
+    captions = "\n".join(item.value for item in app.caption)
+    assert display_path(weights.get_weight_status("birefnet").path) in captions
 
 
 def test_birefnet_setup_page_never_offers_a_hugging_face_source_picker():

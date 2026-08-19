@@ -59,7 +59,7 @@ def test_idml_export_is_a_well_formed_editable_package():
     assert spread.count("<Oval ") == 4
     assert 'Name="Observation box"' in spread
     assert f'Name="QR code ({layout.qr_payload})"' in spread
-    assert 'Name="Template dimensions"' in spread
+    assert 'Name="Sheet and calibration information"' in spread
     for label in layout.artwork_labels:
         assert label in story
     assert 'ColorValue="15 100 100 0"' in graphics

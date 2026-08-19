@@ -6,6 +6,7 @@ import streamlit as st
 
 from mats import weights
 from mats.app import branding
+from mats.app.runtime_paths import display_path
 from mats.birefnet_runtime import birefnet_runtime_status
 from mats.devices import birefnet_device_report
 
@@ -55,14 +56,16 @@ status = weights.get_weight_status("birefnet")
 with st.container(border=True):
     st.subheader("Model checkpoint")
     if status.state == "ready":
-        st.success(f"BiRefNet is installed at `{status.path}`.")
+        st.success(f"BiRefNet is installed at `{display_path(status.path)}`.")
     elif status.state == "invalid":
         st.error(f"BiRefNet checkpoint needs attention: {status.detail}")
     else:
         st.warning(
             f"BiRefNet is not installed. Expected download: {_human_bytes(status.expected_size_bytes)}."
         )
-    st.caption(f"Install location: `{status.path}`")
+    st.caption(
+        f"Install location on the machine running MATS: `{display_path(status.path)}`"
+    )
 
     destination = Path(status.path).parent
     try:
@@ -113,7 +116,7 @@ with st.container(border=True):
             else:
                 install_status.update(label="BiRefNet installed", state="complete", expanded=False)
                 progress.progress(1.0, text="Installation complete.")
-                st.success(f"Installed and verified at `{installed.path}`.")
+                st.success(f"Installed and verified at `{display_path(installed.path)}`.")
                 st.rerun()
 
 with st.expander("Manual and HPC installation"):

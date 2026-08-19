@@ -198,6 +198,11 @@ class TemplateLayout:
         return f"{width}x{length}{self.unit}"
 
     @property
+    def calibration_dimensions(self):
+        """Return the marker-centre dimensions consumed by the measurement pipeline."""
+        return self.observation_width, self.observation_length, self.unit
+
+    @property
     def observation_bounds_in(self):
         """Return ``(top, left, bottom, right)`` in top-down page coordinates."""
         return (

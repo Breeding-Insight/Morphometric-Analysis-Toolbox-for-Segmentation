@@ -44,7 +44,7 @@ mats run \
   -i "$SCRATCH/leaf_images" \
   -o "$SCRATCH/leaf_out" \
   -r "$SCRATCH/leaf_out/results.csv" \
-  -t 10.5x9.5in \
+  --sheet-dimensions 12x12in \
   --mask-method birefnet
 ```
 

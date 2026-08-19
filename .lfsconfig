@@ -16,5 +16,5 @@
 #
 # Note that a bare `git lfs pull` will NOT fetch it -- only -I/--include
 # overrides fetchexclude. That's deliberate: no accidental 2.65 GB pulls.
-[lfs]
-	fetchexclude = weights/birefnet_leaf.pth
+# [lfs]
+#	fetchexclude = weights/birefnet_leaf.pth

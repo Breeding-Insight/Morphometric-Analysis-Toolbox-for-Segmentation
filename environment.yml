@@ -5,8 +5,9 @@
 #   python -m venv .venv && source .venv/bin/activate
 #   pip install -e ".[app]"
 #
-# This file is a convenience for users who prefer conda, or who want the optional
-# "enhanced QR reading" extra (pyzbar), which needs the system `zbar` library:
+# This file is a convenience for users who already prefer conda. It includes
+# `zbar` for the optional pyzbar QR fallback; neither Conda nor zbar is needed
+# for the default OpenCV decoder or the optional QReader fallback:
 #
 #   conda env create -f environment.yml
 #   conda activate mats

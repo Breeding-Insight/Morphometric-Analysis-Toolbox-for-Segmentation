@@ -19,8 +19,9 @@ classifiers = [
 
 # Runtime dependencies for the pipeline + CLI. QR codes are decoded with OpenCV
 # by default, so there is no system-library requirement here -- everything below
-# installs from wheels. Enhanced QR reading (which needs system `zbar`) is the
-# optional `qr` extra below.
+# installs from wheels. Enhanced QR reading is the optional `qr` extra below;
+# its pyzbar backend additionally needs the system `zbar` library, while
+# QReader works without it.
 dependencies = [
     "rfdetr",
     "transformers",
@@ -42,7 +43,8 @@ dependencies = [
 [project.optional-dependencies]
 # Enhanced QR reading: pyzbar + qreader fallbacks for codes OpenCV can't decode
 # (glare, skew, blur). pyzbar additionally needs the system library `zbar`
-# (apt: libzbar0; brew: zbar; conda: `conda install -c conda-forge zbar`).
+# (apt: libzbar0; brew: zbar; conda: `conda install -c conda-forge zbar`), but
+# QReader remains usable without Conda or zbar.
 qr = ["pyzbar", "qreader"]
 # The Streamlit GUI and the Template Creator page.
 app = ["streamlit", "reportlab", "qrcode"]
@@ -64,4 +66,10 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-mats = ["app/assets/*.svg", "models/birefnet/LICENSE"]
+mats = [
+    "app/.streamlit/config.toml",
+    "app/assets/*.svg",
+    "app/assets/samples/*.md",
+    "app/assets/samples/*/*.jpg",
+    "models/birefnet/LICENSE",
+]
