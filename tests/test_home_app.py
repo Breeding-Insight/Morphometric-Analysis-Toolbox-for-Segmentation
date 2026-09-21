@@ -1,8 +1,10 @@
 from pathlib import Path
 
-import numpy as np
 import pytest
 
+# Every heavy import is gated: CI installs with `--no-deps`, so a bare
+# module-level `import numpy` here is a collection error, not a skip.
+np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 pytest.importorskip("streamlit")
 cv2 = pytest.importorskip("cv2")
