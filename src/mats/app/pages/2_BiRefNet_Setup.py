@@ -126,7 +126,7 @@ with st.expander("Manual and HPC installation"):
         "place, no download for anyone who can mount it.\n"
         "- Or set `BIREFNET_CHECKPOINT` to an explicit checkpoint path.\n"
         "- Or, from a terminal in a Git checkout: "
-        "`git lfs pull --include=\"weights/birefnet_leaf.pth\"`.\n"
+        "`git lfs pull -X \"\" -I \"weights/birefnet_leaf.pth\"`.\n"
         "- On air-gapped systems, pre-stage the checkpoint and verify its SHA-256 before "
         "launching MATS."
     )

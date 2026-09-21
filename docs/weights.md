@@ -96,10 +96,12 @@ excluded from the default clone and from a bare `git lfs pull` by `.lfsconfig`
 place, not the 2.65 GB file. Pull it explicitly:
 
 ```bash
-git lfs pull --include="weights/birefnet_leaf.pth"
+git lfs pull -X "" -I "weights/birefnet_leaf.pth"
 ```
 
 or `mats fetch-weights --only birefnet --source lfs`, or the setup page.
+The empty `-X` value clears `.lfsconfig`'s exclusion for this invocation, and
+`-I` limits the pull to the BiRefNet checkpoint.
 
 This exclusion exists because committing BiRefNet without it would force
 *every* `git clone` to download 2.65 GB and spend the repository's Git LFS
@@ -111,8 +113,9 @@ If your Git LFS version predates the exclusion behavior (needs the
 `.lfsconfig` fetchexclude to be read from the repo index/HEAD during the
 initial clone — true for modern Git LFS), a clone could pull BiRefNet anyway.
 `GIT_LFS_SKIP_SMUDGE=1 git clone ...` is a guaranteed way to skip *all* LFS
-content on clone if you want to be certain, then `git lfs pull --include=...`
-each file you actually need.
+content on clone if you want to be certain. Afterward, fetch RF-DETR with
+`git lfs pull --exclude="weights/birefnet_leaf.pth"`; add BiRefNet later with
+`git lfs pull -X "" -I "weights/birefnet_leaf.pth"` if needed.
 
 ## Manual / air-gapped
 

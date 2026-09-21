@@ -14,5 +14,5 @@
 # committing it without the exclusion would force every `git clone` to
 # download 2.65 GB and spend the repo's LFS bandwidth quota. Fetch it via the
 # "BiRefNet setup" page in the app, or:
-#   git lfs pull --include="weights/birefnet_leaf.pth"
+#   git lfs pull -X "" -I "weights/birefnet_leaf.pth"
 weights/*.pth filter=lfs diff=lfs merge=lfs -text
