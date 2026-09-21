@@ -39,7 +39,13 @@ env/
 .vscode/
 .idea/
 
-# AI-assistant working notes (local-only, not shipped)
-CLAUDE.md
+# AI-assistant instructions.
+# Public and committed: AGENTS.md (the source of truth, read by Claude Code,
+# Codex, Cursor, Copilot, Gemini CLI, ...) and CLAUDE.md (a thin file that
+# imports it), so a fresh clone arrives with agent onboarding already in place.
+# Private and never shipped: *.local.md working notes, which load alongside the
+# public files for whoever created them, and the local tool directories.
+CLAUDE.local.md
+AGENTS.local.md
 .claude/
 .agents/

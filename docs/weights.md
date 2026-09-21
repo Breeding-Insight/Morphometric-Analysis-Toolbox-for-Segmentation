@@ -57,6 +57,11 @@ mats fetch-weights --force               # re-download even if present
 mats doctor                              # show resolved paths, channels, and source
 ```
 
+After a clone made with Git LFS installed, bare `mats fetch-weights` is a no-op
+that prints "already present" — RF-DETR arrived with the checkout. The command
+exists to repair a checkout made *without* Git LFS, and to populate a shared
+`MATS_WEIGHTS_DIR`.
+
 BiRefNet is never downloaded automatically. If it is absent when selected,
 MATs reports the missing local checkpoint and leaves Otsu fully usable.
 

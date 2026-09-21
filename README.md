@@ -11,7 +11,6 @@ MATS has four main steps:
 
 > Companion code for the manuscript (target journal: *Plant Phenomics*).
 > BiRefNet is optional and runs entirely from a locally installed checkpoint (see [Model weights](#model-weights)).
-> For USDA users the model weights are hosted on Agdatacommons and the pipeline is available on SciNET
 
 ## Table of Contents  
 
@@ -32,16 +31,48 @@ MATS has four main steps:
 
 ## Installation
 
-MATS requires only Python ≥ 3.9; the recommended `pip` installation method
-pulls all required packages from wheels with **no system libraries and no conda
-required**.
+MATS requires Python ≥ 3.9 and **Git LFS**. Apart from Git LFS, the recommended
+`pip` installation method pulls all required packages from wheels with **no other
+system libraries and no conda required**.
 
-**pip (recommended):**
+### Step 1 — install Git LFS *before* cloning
+
+The RF-DETR marker checkpoint (~134 MB) is stored with [Git LFS](https://git-lfs.com).
+**If you clone without it, you get a 134-byte placeholder file instead of the
+model** — the clone appears to succeed, and MATS then can't detect markers.
+
+```bash
+# macOS:          brew install git-lfs
+# Debian/Ubuntu:  sudo apt install git-lfs
+# Conda:          conda install -c conda-forge git-lfs
+# Windows:        included with Git for Windows
+# RHEL/Fedora:    sudo dnf install git-lfs
+
+git lfs install          # one-time setup, per machine
+```
+
+### Step 2 — clone and install
 
 ```bash
 git clone https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation.git
 cd Morphometric-Analysis-Toolbox-for-Segmentation
 pip install -e ".[app]"                  # ".[app]" adds the Streamlit GUI
+```
+
+The clone brings the RF-DETR checkpoint with it. Confirm it is the real file and
+not a placeholder — it should be ~134 MB, not ~134 bytes:
+
+```bash
+ls -l weights/rf_detr_marker.pth
+```
+
+**Already cloned without Git LFS?** No need to start over — install Git LFS as
+above, then repair the checkout in place. The `--exclude` keeps this to the
+~134 MB RF-DETR file; a bare `git lfs pull` can also fetch the 2.65 GB BiRefNet
+checkpoint:
+
+```bash
+git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"
 ```
 
 **Enhanced QR reading (optional).** OpenCV reads QR codes well when they are oriented correctly and clearly
@@ -65,25 +96,32 @@ If a code can't be read, the pipeline continues — pass the finished sheet size
 with `--sheet-dimensions` (for example, `--sheet-dimensions 12x12in`), so
 enhanced QR is a convenience rather than a requirement.
 
-Finally, fetch the model weights and confirm the environment:
+Finally, confirm the environment:
 
 ```bash
-mats fetch-weights      # fetches the ~134 MB RF-DETR checkpoint (mandatory, default)
-mats fetch-weights --only birefnet --source lfs # optional: explicitly fetch the ~2.65 GB BiRefNet checkpoint
 mats doctor             # checks weights, GPU/CPU device, QR backends
 ```
+
+Run `mats doctor` after installing, this will report MATS operable status.
+Note: RF-DETR weights are REQUIRED for marker detection, BiRefNet is OPTIONAL.
+```bash
+mats fetch-weights                               # repairs a clone made without Git LFS
+mats fetch-weights --only birefnet --source lfs  # optional: the ~2.65 GB BiRefNet checkpoint
+```
+
 ---
 
 ## Model weights
 
-The checkpoints for both the marker detection model and the leaf segmentation model are located in this repository:
+The checkpoints for both the marker detection model and the leaf segmentation model are located in this repository, tracked with Git LFS:
 
 | Model | File | Size |
 |---|---|---|
 | RF-DETR marker detector | `rf_detr_marker.pth` | ~134 MB |
 | BiRefNet leaf segmenter | `birefnet_leaf.pth` | ~2.65 GB |
 
-By default, only the RF-DETR model checkpoint will be downloaded.
+By default, only the RF-DETR model checkpoint will be downloaded: it arrives with every
+`git clone` made with Git LFS installed, so a normal checkout is immediately runnable.
 The BiRefNet checkpoint is LFS-tracked but excluded from the default clone, so it is
 downloaded only through an explicit action:
 
@@ -93,6 +131,11 @@ downloaded only through an explicit action:
 - **Shared filesystem** — set `MATS_WEIGHTS_DIR` (e.g. a SCINet `/project` path)
   to read weights in place with no per-user copy.
 
+**Cloned without Git LFS?** Both files come through as ~134-byte pointer stubs
+rather than models, which MATS detects and reports rather than handing to
+PyTorch. Fix it with `git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"`,
+or `mats fetch-weights`.
+
 Full details and checksums: [docs/weights.md](docs/weights.md).
 
 
@@ -101,9 +144,16 @@ Full details and checksums: [docs/weights.md](docs/weights.md).
 MATS installs in a lightweight **operating configuration** for convenience. The
 standard app includes fast Otsu segmentation and OpenCV's built-in QR reader,
 but it does not automatically download the optional ~2.65 GB BiRefNet
-checkpoint or install the pyzbar/QReader robust-QR fallbacks. The required
-~134 MB RF-DETR marker checkpoint is also fetched explicitly with `mats
-fetch-weights` so installations never hide a model download.
+checkpoint or install the pyzbar/QReader robust-QR fallbacks.
+
+The required ~134 MB RF-DETR marker checkpoint is different: it is mandatory for
+every run, so it ships **in the clone** via Git LFS and needs no separate
+download step. If it is ever missing — a clone made without Git LFS, or an
+install outside a Git checkout — MATS fetches it once on first use and prints
+`Fetching weights/rf_detr_marker.pth via Git LFS ...` while it does. Set
+`MATS_NO_AUTO_FETCH=1` to turn that off and require pre-staged weights instead
+(recommended on HPC login nodes). The app never does this silently: a missing
+RF-DETR checkpoint is a blocking Preflight error.
 
 This keeps the initial network and disk footprint predictable, avoids native
 `zbar` failures on managed machines, and works better on HPC systems and
@@ -114,7 +164,7 @@ photographs require:
 |---|---|---|
 | Otsu leaf segmentation | Yes | Nothing |
 | Clear QR codes with OpenCV | Yes | Nothing |
-| RF-DETR marker detection | Code included | `mats fetch-weights` |
+| RF-DETR marker detection | Yes — checkpoint ships in the clone (Git LFS) | Nothing |
 | BiRefNet segmentation | No checkpoint | `mats fetch-weights --only birefnet --source lfs` |
 | Robust QR fallbacks | No | `pip install "mats-morpho[app,qr]"` |
 
@@ -129,6 +179,7 @@ a run.
 
 - **I want to click buttons →** [Using the app](#using-the-app)
 - **I want to script it →** [Using the command line](#using-the-command-line)
+- **I have a question →** [FAQ](docs/faq.md)
 
 Both run the exact same pipeline and produce the same measurements.
 
@@ -238,10 +289,6 @@ A `leaf_morpho_failures.csv` records per-image warnings and failures.
 
 ---
 
-
-
----
-
 ## Running on a compute cluster
 
 An Open OnDemand Batch Connect app that serves the GUI on a compute node is in
@@ -267,7 +314,8 @@ detail.
 
 ## Troubleshooting
 
-Run `MATS doctor` first — it reports most of these.
+Run `mats doctor` first — it reports most of these, and the [FAQ](docs/faq.md)
+covers the common questions in more detail.
 
 - **QR code not read / measurements need a scale** — the default OpenCV decoder
   couldn't read the code. Pass the finished sheet size with
@@ -277,13 +325,24 @@ Run `MATS doctor` first — it reports most of these.
   conda: `conda install -c conda-forge zbar`).
 - **CUDA out of memory** (only relevant with `--mask-method birefnet`) — process
   in smaller batches, or use `--mask-method threshold` (the default).
-- **No markers detected** — check print quality and that the marker color
+- **No markers detected / "RF-DETR checkpoint missing"** — first check that the
+  checkpoint is a real file and not a Git LFS placeholder:
+  `ls -l weights/rf_detr_marker.pth` should show ~134 MB, not ~134 bytes. If it's
+  a placeholder, run `git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"`. Otherwise check print
+  quality and that the marker color
   matches the template (the Template Creator uses the trained color); make sure
   all four corners are in frame.
 - **Blank page on Open OnDemand** — almost always the reverse-proxy
   `baseUrlPath` mismatch; see [deploy/ondemand/mats/README.md](deploy/ondemand/mats/README.md).
 
 ---
+
+## Working with an AI assistant
+
+This repository ships agent instructions in [AGENTS.md](AGENTS.md) (with a
+companion [CLAUDE.md](CLAUDE.md)), so a coding assistant you point at your clone
+— Claude Code, Codex, Cursor, Copilot, Gemini CLI — already knows how MATS is
+installed, run, and structured, and can help you troubleshoot a batch.
 
 ## Citing
 

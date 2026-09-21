@@ -5,6 +5,8 @@ import zipfile
 from pathlib import Path
 
 import altair as alt
+import cv2
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -259,9 +261,64 @@ PREVIEW_HARD_MAX = 24
 PREVIEW_AUTO_HIDE_THRESHOLD = 50
 PREVIEW_IMAGE_WIDTH = 280
 LARGE_BATCH_THRESHOLD = 200
+OVERLAY_TINT_COLOR = (255, 0, 255)  # BGR magenta -- reads clearly against green foliage
+OVERLAY_TINT_ALPHA = 0.4
 
 
-def gather_output_files(output_dir, results_path):
+def build_overlay_image(target_box, binary_mask, color=OVERLAY_TINT_COLOR, alpha=OVERLAY_TINT_ALPHA):
+    """Blend a translucent tint + contour outline over the segmented region, for QC review."""
+    mask_bool = binary_mask.astype(bool)
+    tint = np.full_like(target_box, color, dtype=target_box.dtype)
+    blended = cv2.addWeighted(target_box, 1.0 - alpha, tint, alpha, 0)
+    overlay = target_box.copy()
+    overlay[mask_bool] = blended[mask_bool]
+    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    thickness = max(2, min(6, min(target_box.shape[:2]) // 300))
+    cv2.drawContours(overlay, contours, -1, color, thickness, cv2.LINE_AA)
+    return overlay
+
+
+def build_cutout_image(target_box, binary_mask):
+    """Isolate the segmented leaf pixels; everything outside the mask is black."""
+    return cv2.bitwise_and(target_box, target_box, mask=binary_mask)
+
+
+def generate_export_overlays(output_dir, include_overlay, include_cutout):
+    """Materialize {sample}_overlay.jpg / {sample}_cutout.jpg for every mask+target-box pair.
+
+    Always regenerates: output_dir can be reused across runs with a different mask
+    method or source images, so a stale derived file from a prior run must not be
+    served instead of one matching the current mask.
+    """
+    if not include_overlay and not include_cutout:
+        return
+    output_dir = Path(output_dir)
+    for mask_path in sorted(output_dir.glob("*_mask.png")):
+        sample_id = mask_path.name[: -len("_mask.png")]
+        target_box_path = output_dir / f"{sample_id}_target_box.jpg"
+        if not target_box_path.is_file():
+            continue
+
+        binary_mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        target_box = cv2.imread(str(target_box_path), cv2.IMREAD_COLOR)
+        if binary_mask is None or target_box is None:
+            continue
+        if binary_mask.shape[:2] != target_box.shape[:2]:
+            continue
+
+        if include_overlay:
+            cv2.imwrite(
+                str(output_dir / f"{sample_id}_overlay.jpg"),
+                build_overlay_image(target_box, binary_mask),
+            )
+        if include_cutout:
+            cv2.imwrite(
+                str(output_dir / f"{sample_id}_cutout.jpg"),
+                build_cutout_image(target_box, binary_mask),
+            )
+
+
+def gather_output_files(output_dir, results_path, include_overlay=False, include_cutout=False):
     """Return the artifact files an export ZIP should contain."""
     output_dir = Path(output_dir)
     files = []
@@ -273,6 +330,10 @@ def gather_output_files(output_dir, results_path):
         files.append(failures_path)
     files.extend(sorted(output_dir.glob("*_target_box.jpg")))
     files.extend(sorted(output_dir.glob("*_mask.png")))
+    if include_overlay:
+        files.extend(sorted(output_dir.glob("*_overlay.jpg")))
+    if include_cutout:
+        files.extend(sorted(output_dir.glob("*_cutout.jpg")))
     return files
 
 
@@ -1598,7 +1659,7 @@ def render_results(lm):
             icon=":material/folder_off:",
         )
         render_output_preview(st.session_state.get("viewer_pairs", []))
-        render_zip_export(results_path, output_path)
+        render_export_section(results_path, output_path, unit_symbol)
         return
 
     total_rows = count_csv_rows(results_path)
@@ -1805,17 +1866,10 @@ def render_results(lm):
                 unit_symbol,
                 area_symbol,
             )
-    st.download_button(
-        f"Download results CSV ({unit_symbol})",
-        data=results_path.read_bytes(),
-        file_name=results_path.name,
-        mime="text/csv",
-        icon=":material/download:",
-    )
+    render_export_section(results_path, output_path, unit_symbol)
 
     with st.expander("Browse Output Previews", icon=":material/photo_library:"):
         render_output_preview(st.session_state.get("viewer_pairs", []))
-    render_zip_export(results_path, output_path)
 
 
 def render_specimen_inspector(sample_id, measurement, pairs, unit_symbol="cm", area_symbol="cm²"):
@@ -1912,38 +1966,125 @@ def render_output_preview(pairs, selected_sample_id=None):
         render_output_pair(pair)
 
 
-def render_zip_export(results_path, output_path):
-    files = gather_output_files(output_path, results_path)
-    if not files:
-        return
+def _clear_export_zip_cache():
+    """Invalidate a previously prepared ZIP when the export selection changes."""
+    st.session_state.pop("export_zip_path", None)
 
-    count, total_bytes = estimate_zip_inputs(files)
-    st.markdown("**Export**")
-    st.caption(f"{count} file(s), ~{human_bytes(total_bytes)} uncompressed.")
 
-    if total_bytes > ZIP_SIZE_WARN_BYTES:
-        st.warning(
-            f"Outputs total ~{human_bytes(total_bytes)}. Building a ZIP this large can be "
-            f"slow and memory-heavy. Consider collecting files directly from "
-            f"`{display_path(output_path)}` "
-            "instead."
+def render_export_section(results_path, output_path, unit_symbol):
+    """Render a clearly defined Export section: CSV-only vs. the full ZIP bundle."""
+    output_path = Path(output_path)
+    st.subheader("Export", anchor=False)
+    st.caption("Download the outputs from this run. Pick exactly what you need.")
+    csv_column, zip_column = st.columns(2, vertical_alignment="top")
+
+    with csv_column.container(border=True):
+        st.markdown("**Measurements only**")
+        st.caption("Just the results CSV — sample IDs, area, width, length. No images.")
+        if results_path.is_file():
+            st.download_button(
+                f"Download results CSV ({unit_symbol})",
+                data=results_path.read_bytes(),
+                file_name=results_path.name,
+                mime="text/csv",
+                icon=":material/download:",
+                key="download_csv_only",
+            )
+        else:
+            st.caption("Not available yet.")
+
+    base_files = gather_output_files(output_path, results_path)
+    with zip_column.container(border=True):
+        st.markdown("**Full export (ZIP)**")
+        st.caption(
+            "Results CSV + failure log + segmentation masks + specimen photos, "
+            "bundled together."
         )
+        if not base_files:
+            st.caption("No output files found yet.")
+            return
 
-    if st.button("Prepare ZIP for download"):
-        with st.spinner("Building ZIP..."):
-            dest = Path(tempfile.gettempdir()) / "leaf_morpho_outputs.zip"
-            write_output_zip(files, dest)
+        pair_count = len(list(output_path.glob("*_mask.png")))
+        include_overlay = st.checkbox(
+            "Include overlay images (mask highlighted on photo)",
+            key="export_include_overlay",
+            help=(
+                "One extra JPG per specimen: the photo with the detected leaf "
+                "region tinted and outlined, for visually checking segmentation "
+                "accuracy."
+            ),
+            on_change=_clear_export_zip_cache,
+            persist_state="page",
+        )
+        include_cutout = st.checkbox(
+            "Include specimen cutouts (background removed)",
+            key="export_include_cutout",
+            help=(
+                "One extra JPG per specimen: just the leaf pixels, with the "
+                "background blacked out."
+            ),
+            on_change=_clear_export_zip_cache,
+            persist_state="page",
+        )
+        enabled_extra_count = int(include_overlay) + int(include_cutout)
+
+        count, total_bytes = estimate_zip_inputs(base_files)
+        if enabled_extra_count and pair_count:
+            target_box_paths = list(output_path.glob("*_target_box.jpg"))
+            avg_target_box_bytes = (
+                sum(path.stat().st_size for path in target_box_paths) / len(target_box_paths)
+                if target_box_paths
+                else 0
+            )
+            count += pair_count * enabled_extra_count
+            total_bytes += int(pair_count * avg_target_box_bytes * enabled_extra_count)
+
+        st.caption(f"{count} file(s), ~{human_bytes(total_bytes)} uncompressed.")
+        if total_bytes > ZIP_SIZE_WARN_BYTES:
+            st.warning(
+                f"Outputs total ~{human_bytes(total_bytes)}. Building a ZIP this large can be "
+                f"slow and memory-heavy. Consider collecting files directly from "
+                f"`{display_path(output_path)}` "
+                "instead."
+            )
+
+        if st.button("Prepare ZIP for download", icon=":material/folder_zip:"):
+            large_batch = enabled_extra_count and pair_count > LARGE_BATCH_THRESHOLD
+            if large_batch:
+                with st.spinner("Generating overlay/cutout images..."):
+                    generate_export_overlays(output_path, include_overlay, include_cutout)
+                with st.spinner("Building ZIP..."):
+                    files = gather_output_files(
+                        output_path, results_path, include_overlay, include_cutout
+                    )
+                    dest = Path(tempfile.gettempdir()) / "leaf_morpho_outputs.zip"
+                    write_output_zip(files, dest)
+            else:
+                with st.spinner("Building ZIP..."):
+                    generate_export_overlays(output_path, include_overlay, include_cutout)
+                    files = gather_output_files(
+                        output_path, results_path, include_overlay, include_cutout
+                    )
+                    dest = Path(tempfile.gettempdir()) / "leaf_morpho_outputs.zip"
+                    write_output_zip(files, dest)
             st.session_state["export_zip_path"] = str(dest)
 
-    zip_path = st.session_state.get("export_zip_path")
-    if zip_path and Path(zip_path).is_file():
-        with open(zip_path, "rb") as zf:
-            st.download_button(
-                "Download ZIP (target boxes, masks, CSV)",
-                data=zf,
-                file_name="leaf_morpho_outputs.zip",
-                mime="application/zip",
-            )
+        zip_path = st.session_state.get("export_zip_path")
+        if zip_path and Path(zip_path).is_file():
+            contents = ["target boxes", "masks", "CSV"]
+            if include_overlay:
+                contents.append("overlays")
+            if include_cutout:
+                contents.append("cutouts")
+            with open(zip_path, "rb") as zf:
+                st.download_button(
+                    f"Download ZIP ({', '.join(contents)})",
+                    data=zf,
+                    file_name="leaf_morpho_outputs.zip",
+                    mime="application/zip",
+                    icon=":material/download:",
+                    key="download_zip_export",
+                )
 
 
 if __name__ == "__main__":

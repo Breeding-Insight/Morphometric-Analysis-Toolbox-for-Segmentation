@@ -23,7 +23,7 @@ classifiers = [
 # its pyzbar backend additionally needs the system `zbar` library, while
 # QReader works without it.
 dependencies = [
-    "rfdetr",
+    "rfdetr==1.5.2",
     "transformers",
     "torch",
     "torchvision",
