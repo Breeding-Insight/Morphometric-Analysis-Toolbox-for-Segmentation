@@ -12,9 +12,9 @@
 # Opt in via the "BiRefNet setup" page in the MATS app, `mats fetch-weights
 # --only birefnet --source lfs`, or by hand:
 #
-#     git lfs pull --include="weights/birefnet_leaf.pth"
+#     git lfs pull -X "" -I "weights/birefnet_leaf.pth"
 #
-# Note that a bare `git lfs pull` will NOT fetch it -- only -I/--include
-# overrides fetchexclude. That's deliberate: no accidental 2.65 GB pulls.
-# [lfs]
-#	fetchexclude = weights/birefnet_leaf.pth
+# A bare pull and an include-only pull both retain fetchexclude. `-X ""`
+# clears that exclusion for this invocation; `-I` limits the pull to BiRefNet.
+[lfs]
+	fetchexclude = weights/birefnet_leaf.pth

@@ -76,12 +76,38 @@ def test_pointer_is_not_counted_present(monkeypatch, tmp_path):
     assert weights._is_present(tmp_path / "rf_detr_marker.pth") is False
 
 
-def test_fetch_without_any_source_prints_manual(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize(
+    ("name", "filename", "override", "command", "forbidden"),
+    (
+        (
+            "rf-detr",
+            "rf_detr_marker.pth",
+            "RF_DETR_MARKER_CHECKPOINT",
+            'git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"',
+            'git lfs pull -X "" -I',
+        ),
+        (
+            "birefnet",
+            "birefnet_leaf.pth",
+            "BIREFNET_CHECKPOINT",
+            'git lfs pull -X "" -I "weights/birefnet_leaf.pth"',
+            "git lfs install &&",
+        ),
+    ),
+)
+def test_fetch_without_any_source_prints_checkpoint_instructions(
+    monkeypatch, tmp_path, capsys, name, filename, override, command, forbidden
+):
     weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path))
     assert weights._HF_REPO_ID is None
-    code = weights.fetch()
+    code = weights.fetch(only=name)
     assert code == 1
-    assert "No automatic download source" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "No automatic download source" in err
+    assert filename in err
+    assert override in err
+    assert command in err
+    assert forbidden not in err
 
 
 def test_ensure_weight_returns_present_file(monkeypatch, tmp_path):
@@ -109,12 +135,33 @@ def test_require_local_weight_missing_never_attempts_fetch(monkeypatch, tmp_path
         weights.require_local_weight("birefnet")
 
 
-def test_ensure_weight_honors_no_auto_fetch(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("name", "command", "forbidden"),
+    (
+        (
+            "rf-detr",
+            'git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"',
+            "--only birefnet",
+        ),
+        (
+            "birefnet",
+            'git lfs pull -X "" -I "weights/birefnet_leaf.pth"',
+            "--only rf-detr",
+        ),
+    ),
+)
+def test_ensure_weight_honors_no_auto_fetch(
+    monkeypatch, tmp_path, name, command, forbidden
+):
     weights = _fresh_weights(
         monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path), MATS_NO_AUTO_FETCH="1"
     )
-    with pytest.raises(FileNotFoundError, match="auto-fetch is disabled"):
-        weights.ensure_weight("birefnet")
+    with pytest.raises(FileNotFoundError, match="auto-fetch is disabled") as exc_info:
+        weights.ensure_weight(name)
+    message = str(exc_info.value)
+    assert f"--only {name} --source lfs" in message
+    assert command in message
+    assert forbidden not in message
 
 
 def test_ensure_weight_pulls_checkout_pointer_via_lfs(monkeypatch, tmp_path):
@@ -199,30 +246,69 @@ def test_status_missing_for_excluded_checkout_pointer(monkeypatch, tmp_path):
     status = weights.get_weight_status("birefnet")
     assert status.state == "missing"
     assert "excluded" in status.detail.lower()
+    assert "--only birefnet --source lfs" in status.detail
     assert {s.id for s in status.sources} == {"hf", "lfs"}
 
 
-def test_download_from_lfs_success(monkeypatch, tmp_path):
+def test_status_rf_detr_pointer_recommends_rf_detr_repair(monkeypatch, tmp_path):
+    weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path / "cache"))
+    checkout = tmp_path / "checkout"
+    (checkout / "weights").mkdir(parents=True)
+    (checkout / ".git").mkdir()
+    (checkout / "weights" / "rf_detr_marker.pth").write_bytes(LFS_POINTER)
+    monkeypatch.setattr(weights, "_REPO_ROOT", checkout)
+
+    status = weights.get_weight_status("rf-detr")
+
+    assert status.state == "missing"
+    assert "git lfs install" in status.detail
+    assert "--only rf-detr --source lfs" in status.detail
+    assert "--only birefnet" not in status.detail
+
+
+@pytest.mark.parametrize(
+    ("name", "filename", "expected_args"),
+    (
+        (
+            "rf-detr",
+            "rf_detr_marker.pth",
+            ["git", "lfs", "pull", "--exclude", "weights/birefnet_leaf.pth"],
+        ),
+        (
+            "birefnet",
+            "birefnet_leaf.pth",
+            ["git", "lfs", "pull", "-X", "", "-I", "weights/birefnet_leaf.pth"],
+        ),
+    ),
+)
+def test_download_from_lfs_success(monkeypatch, tmp_path, name, filename, expected_args):
     weights = _fresh_weights(monkeypatch, tmp_path, MATS_WEIGHTS_DIR=str(tmp_path / "cache"))
     checkout = tmp_path / "checkout"
     (checkout / "weights").mkdir(parents=True)
     (checkout / ".git").mkdir()
     monkeypatch.setattr(weights, "_REPO_ROOT", checkout)
+    monkeypatch.setattr(weights, "_git_lfs_installed", lambda: True)
     monkeypatch.setattr(weights, "free_bytes", lambda path: 10 ** 12)
 
     real_bytes = b"\x80\x02" + b"x" * 4094
     digest = hashlib.sha256(real_bytes).hexdigest()
-    monkeypatch.setitem(weights._MANIFEST["birefnet"], "size_bytes", len(real_bytes))
-    monkeypatch.setitem(weights._MANIFEST["birefnet"], "sha256", digest)
+    monkeypatch.setitem(weights._MANIFEST[name], "size_bytes", len(real_bytes))
+    monkeypatch.setitem(weights._MANIFEST[name], "sha256", digest)
+    calls = []
 
-    def fake_popen(*args, **kwargs):
-        (checkout / "weights" / "birefnet_leaf.pth").write_bytes(real_bytes)
+    def fake_popen(args, **kwargs):
+        calls.append((args, kwargs))
+        (checkout / "weights" / filename).write_bytes(real_bytes)
         return _FakeProcess(0)
 
     monkeypatch.setattr(weights.subprocess, "Popen", fake_popen)
 
-    assert weights._download_from_lfs("birefnet") is True
-    assert (checkout / "weights" / "birefnet_leaf.pth").read_bytes() == real_bytes
+    assert weights._download_from_lfs(name) is True
+    assert (checkout / "weights" / filename).read_bytes() == real_bytes
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == expected_args
+    assert kwargs["cwd"] == checkout
 
 
 def test_download_from_lfs_failure(monkeypatch, tmp_path):
@@ -231,6 +317,7 @@ def test_download_from_lfs_failure(monkeypatch, tmp_path):
     (checkout / "weights").mkdir(parents=True)
     (checkout / ".git").mkdir()
     monkeypatch.setattr(weights, "_REPO_ROOT", checkout)
+    monkeypatch.setattr(weights, "_git_lfs_installed", lambda: True)
     monkeypatch.setattr(weights, "free_bytes", lambda path: 10 ** 12)
     monkeypatch.setattr(weights.subprocess, "Popen", lambda *a, **k: _FakeProcess(1))
 

@@ -6,11 +6,10 @@ hatch -- :mod:`mats.paths` resolves to whichever channel produces a real file:
 
 1. **Hugging Face Hub** -- the default public host. Free, no account needed,
    but unreachable on some institutional networks (notably USDA's).
-2. **Git LFS** -- By default, MATS will only pull the RF-DETR checkpoint file
-   when fetching weights via ``git-lfs pull``. To pull the larger BiRefNet file,
-   you can run ``mats fetch-weights --only birefnet --source lfs`` or just
-   ``git-lfs pull``. This channel exists because Hugging Face is not reachable
-   from every collaborator's network.
+2. **Git LFS** -- The default clone and pull exclude BiRefNet, so RF-DETR is
+   available without an automatic 2.65 GB download. Install BiRefNet explicitly
+   with ``mats fetch-weights --only birefnet --source lfs``. This channel exists
+   because Hugging Face is not reachable from every collaborator's network.
 3. **A shared/mounted filesystem** (e.g. USDA SCINet ``/project``) -- point
    ``MATS_WEIGHTS_DIR`` at it and the weights are read in place, no download,
    for anyone who can mount it.
@@ -205,7 +204,17 @@ def get_weight_status(name):
 
     checkout = _checkout_target(name)
     if checkout is not None and looks_like_lfs_pointer(checkout):
-        detail = "Not yet fetched via Git LFS -- fetch it via the app, `mats fetch-weights --only birefnet` or Hugging Face."
+        if name == "birefnet":
+            detail = (
+                "Excluded from the default Git LFS clone. Fetch it via the app or "
+                "`mats fetch-weights --only birefnet --source lfs`."
+            )
+        else:
+            detail = (
+                "Git LFS left an RF-DETR pointer instead of the checkpoint. Run "
+                "`git lfs install && git lfs pull --exclude=\"weights/birefnet_leaf.pth\"` "
+                "or `mats fetch-weights --only rf-detr --source lfs`."
+            )
         return WeightStatus(name, checkout, "missing", detail, 0, spec["size_bytes"], sources)
 
     target = _download_target(name)
@@ -220,18 +229,36 @@ def _emit(progress_callback, phase, completed, total):
         progress_callback(phase, completed, total)
 
 
-def _manual_instructions():
+def _lfs_pull_args(name):
+    """Return a Git LFS pull command that fetches only the intended weights."""
+    birefnet_rel = f"weights/{_MANIFEST['birefnet']['filename']}"
+    if name == "birefnet":
+        return ["git", "lfs", "pull", "-X", "", "-I", birefnet_rel]
+    return ["git", "lfs", "pull", "--exclude", birefnet_rel]
+
+
+def _lfs_manual_command(name):
+    """Return the shell form of the checkpoint-specific Git LFS repair."""
+    if name == "birefnet":
+        return 'git lfs pull -X "" -I "weights/birefnet_leaf.pth"'
+    return 'git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"'
+
+
+def _manual_instructions(name):
+    spec = _MANIFEST[name]
+    override = (
+        "RF_DETR_MARKER_CHECKPOINT" if name == "rf-detr" else "BIREFNET_CHECKPOINT"
+    )
     print(
         "No automatic download source is available in this build.\n\n"
-        "Get the checkpoints one of these ways:\n"
-        f"  - Download them and place them here:\n"
-        f"      {WEIGHTS_DIR / RF_DETR_MARKER_FILENAME}\n"
-        f"      {WEIGHTS_DIR / BIREFNET_FILENAME}\n"
-        "  - Or set MATS_WEIGHTS_DIR to a directory that already contains them\n"
+        f"Get {spec['filename']} one of these ways:\n"
+        "  - Download it and place it here:\n"
+        f"      {WEIGHTS_DIR / spec['filename']}\n"
+        "  - Or set MATS_WEIGHTS_DIR to a directory that already contains it\n"
         "    (e.g. a shared SCINet /project path).\n"
-        "  - Or set RF_DETR_MARKER_CHECKPOINT / BIREFNET_CHECKPOINT to specific files.\n"
+        f"  - Or set {override} to the specific file.\n"
         "  - Or, from a Git checkout with Git LFS installed:\n"
-        "      git lfs pull\n\n"
+        f"      {_lfs_manual_command(name)}\n\n"
         "See docs/weights.md.",
         file=sys.stderr,
     )
@@ -334,11 +361,9 @@ def _emit_lfs_progress(progress_path, progress_callback, fallback_total, last_do
 def _download_from_lfs(name, progress_callback=None):
     """Fetch one checkpoint via Git LFS.
 
-    For BiRefNet, runs a plain ``git lfs pull`` (no flags) so the large
-    checkpoint is fetched without affecting other files.  For all other
-    checkpoints, runs ``git lfs pull --exclude weights/birefnet_leaf.pth``
-    so the 2.65 GB BiRefNet file is never pulled as a side-effect of an
-    unrelated weight update.
+    BiRefNet clears the repository exclusion for one invocation and includes
+    only its checkpoint. All other checkpoints explicitly exclude BiRefNet so
+    it is never pulled as a side effect of an unrelated weight update.
 
     Writes into the checkout's weights/ directory -- that's where Git LFS
     smudges content, and it's tier 3 of paths.py's resolution order, so the
@@ -364,16 +389,10 @@ def _download_from_lfs(name, progress_callback=None):
     rel_path = f"weights/{spec['filename']}"
     print(f"Fetching {rel_path} via Git LFS -> {target}")
 
-    # For BiRefNet use a plain `git lfs pull` (no flags) -- without a
-    # fetchexclude in .lfsconfig a bare pull fetches all LFS files, which is
-    # what we want for this explicit opt-in download.
-    # For everything else, exclude the large BiRefNet checkpoint so it is
-    # never pulled as an unintended side-effect.
-    birefnet_rel = f"weights/{_MANIFEST['birefnet']['filename']}"
-    if name == "birefnet":
-        lfs_cmd = ["git", "lfs", "pull"]
-    else:
-        lfs_cmd = ["git", "lfs", "pull", "--exclude", birefnet_rel]
+    # `-X ""` clears .lfsconfig's exclusion for the explicit BiRefNet request;
+    # `-I` keeps that pull scoped to BiRefNet. Other requests explicitly
+    # exclude the large optional checkpoint under either repository setting.
+    lfs_cmd = _lfs_pull_args(name)
 
     with tempfile.TemporaryDirectory() as tmp:
         progress_path = Path(tmp) / "progress"
@@ -495,7 +514,7 @@ def fetch(only=None, force=False, source="auto"):
                 print(f"error: {by_id[source].label} is unavailable: {by_id[source].reason}",
                       file=sys.stderr)
             else:
-                _manual_instructions()
+                _manual_instructions(name)
             ok = False
             continue
 
@@ -530,13 +549,13 @@ def ensure_weight(name):
         raise FileNotFoundError(
             f"{spec['filename']} not found and auto-fetch is disabled "
             f"({_AUTO_FETCH_DISABLED} is set). Pre-stage the weights, or run "
-            f"`mats fetch-weights --only {name}` after unsetting {_AUTO_FETCH_DISABLED} "
-            f"(from a Git checkout, `git lfs pull` fetches all weights including birefnet, or "
-            f"`git lfs pull --exclude weights/{_MANIFEST['birefnet']['filename']}` fetches all others)."
+            f"`mats fetch-weights --only {name} --source lfs` after unsetting "
+            f"{_AUTO_FETCH_DISABLED}. From a Git checkout, run "
+            f"`{_lfs_manual_command(name)}`."
         )
 
-    # A pointer stub for BiRefNet means the user hasn't run `git lfs pull`
-    # for it yet (it's large and opt-in) -- fetch it rather than failing.
+    # A pointer stub means Git LFS has not materialized this checkpoint yet.
+    # Fetch the requested checkpoint rather than handing the stub to a model.
     checkout = _checkout_target(name)
     if checkout is not None and looks_like_lfs_pointer(checkout) and _download_from_lfs(name):
         return checkout
