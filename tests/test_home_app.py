@@ -1,16 +1,22 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 pd = pytest.importorskip("pandas")
 pytest.importorskip("streamlit")
+cv2 = pytest.importorskip("cv2")
 from streamlit.testing.v1 import AppTest
 from mats.app.Home import (
     PENDING_WORKSPACE_TAB_KEY,
     WORKSPACE_TAB_KEY,
     _WORKBENCH_STYLES,
     _resolve_sheet_layout,
+    build_cutout_image,
+    build_overlay_image,
     collect_output_pairs,
+    gather_output_files,
+    generate_export_overlays,
     merge_viewer_pairs,
     normalize_measurements,
     summarize_measurements,
@@ -81,6 +87,92 @@ def test_merge_viewer_pairs_accumulates_current_session_without_duplicates():
     pairs = merge_viewer_pairs([first], [updated, second])
 
     assert pairs == [updated, second]
+
+
+def _write_real_output_pair(output_dir, sample_id, size=10, fill=200):
+    """Write a real, decodable target-box JPG + binary mask PNG for image-helper tests."""
+    target_box = np.full((size, size, 3), fill, dtype=np.uint8)
+    binary_mask = np.zeros((size, size), dtype=np.uint8)
+    binary_mask[2:-2, 2:-2] = 255
+    target_box_path = output_dir / f"{sample_id}_target_box.jpg"
+    mask_path = output_dir / f"{sample_id}_mask.png"
+    cv2.imwrite(str(target_box_path), target_box)
+    cv2.imwrite(str(mask_path), binary_mask)
+    return target_box_path, mask_path
+
+
+def test_build_overlay_image_tints_only_the_masked_region():
+    target_box = np.zeros((10, 10, 3), dtype=np.uint8)
+    binary_mask = np.zeros((10, 10), dtype=np.uint8)
+    binary_mask[2:8, 2:8] = 255
+
+    overlay = build_overlay_image(target_box, binary_mask, color=(0, 255, 0), alpha=1.0)
+
+    assert overlay.shape == target_box.shape
+    assert tuple(overlay[0, 0]) == (0, 0, 0)
+    assert tuple(overlay[5, 5]) == (0, 255, 0)
+
+
+def test_build_cutout_image_blacks_out_everything_outside_the_mask():
+    target_box = np.full((10, 10, 3), 200, dtype=np.uint8)
+    binary_mask = np.zeros((10, 10), dtype=np.uint8)
+    binary_mask[2:8, 2:8] = 255
+
+    cutout = build_cutout_image(target_box, binary_mask)
+
+    assert tuple(cutout[0, 0]) == (0, 0, 0)
+    assert tuple(cutout[5, 5]) == (200, 200, 200)
+
+
+def test_generate_export_overlays_writes_only_the_requested_kinds(tmp_path):
+    _write_real_output_pair(tmp_path, "leaf_1")
+
+    generate_export_overlays(tmp_path, include_overlay=True, include_cutout=False)
+
+    assert (tmp_path / "leaf_1_overlay.jpg").is_file()
+    assert not (tmp_path / "leaf_1_cutout.jpg").is_file()
+
+
+def test_generate_export_overlays_skips_masks_without_a_target_box(tmp_path):
+    (tmp_path / "orphan_mask.png").write_bytes(b"not a real png but presence is what matters")
+
+    generate_export_overlays(tmp_path, include_overlay=True, include_cutout=True)
+
+    assert not (tmp_path / "orphan_overlay.jpg").is_file()
+    assert not (tmp_path / "orphan_cutout.jpg").is_file()
+
+
+def test_generate_export_overlays_regenerates_stale_files(tmp_path):
+    # JPEG re-encoding is lossy, so compare with tolerance rather than exact equality.
+    _write_real_output_pair(tmp_path, "leaf_1", fill=200)
+    generate_export_overlays(tmp_path, include_overlay=False, include_cutout=True)
+    first_cutout = cv2.imread(str(tmp_path / "leaf_1_cutout.jpg"))
+    assert abs(int(first_cutout[5, 5][0]) - 200) <= 5
+
+    _write_real_output_pair(tmp_path, "leaf_1", fill=50)
+    generate_export_overlays(tmp_path, include_overlay=False, include_cutout=True)
+    second_cutout = cv2.imread(str(tmp_path / "leaf_1_cutout.jpg"))
+
+    assert abs(int(second_cutout[5, 5][0]) - 50) <= 5
+
+
+def test_gather_output_files_includes_overlay_and_cutout_only_when_requested(tmp_path):
+    _write_real_output_pair(tmp_path, "leaf_1")
+    generate_export_overlays(tmp_path, include_overlay=True, include_cutout=True)
+    results_path = tmp_path / "leaf_morpho_results.csv"
+    results_path.write_text("sample_id\nleaf_1\n")
+
+    plain = gather_output_files(tmp_path, results_path)
+    with_extras = gather_output_files(
+        tmp_path, results_path, include_overlay=True, include_cutout=True
+    )
+
+    plain_names = {path.name for path in plain}
+    extra_names = {path.name for path in with_extras}
+    assert "leaf_1_overlay.jpg" not in plain_names
+    assert "leaf_1_cutout.jpg" not in plain_names
+    assert "leaf_1_overlay.jpg" in extra_names
+    assert "leaf_1_cutout.jpg" in extra_names
 
 
 def test_home_page_renders_analyze_view_without_worker_control():
@@ -277,6 +369,38 @@ def test_results_tab_uses_the_completed_run_unit(tmp_path):
     assert app.metric[1].value == "2.50 in²"
     assert app.metric[2].value == "1.50 in"
     assert app.download_button[0].label == "Download results CSV (in)"
+
+
+def test_results_tab_has_a_clearly_defined_export_section(tmp_path):
+    results_path = tmp_path / "leaf_morpho_results.csv"
+    results_path.write_text(
+        "sample_id,leaf_area_cm2,width_cm,length_cm\nleaf_1,12.5,2.5,7.0\n"
+    )
+    app = AppTest.from_file(str(HOME_PAGE))
+    app.session_state[WORKSPACE_TAB_KEY] = "Results"
+    app.session_state["last_run"] = {
+        "succeeded": 1,
+        "failed": 0,
+        "total": 1,
+        "workers": 1,
+        "worker_reason": "test",
+        "execution_device": "cpu",
+        "failure_rows": [],
+        "failure_overflow": 0,
+        "results_path": str(results_path),
+        "output_path": str(tmp_path),
+        "mask_method": "threshold",
+    }
+    app.run(timeout=30)
+
+    assert not app.exception
+    assert any(item.value == "Export" for item in app.subheader)
+    markdown_values = {item.value for item in app.markdown}
+    assert "**Measurements only**" in markdown_values
+    assert "**Full export (ZIP)**" in markdown_values
+    checkbox_labels = {item.label for item in app.checkbox}
+    assert "Include overlay images (mask highlighted on photo)" in checkbox_labels
+    assert "Include specimen cutouts (background removed)" in checkbox_labels
 
 
 def test_results_tab_shows_qr_trace_when_full_qr_columns_are_present(tmp_path):

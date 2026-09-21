@@ -5,6 +5,13 @@ All notable changes to MATs are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Changed
+- Documentation now matches the shipped weights-delivery behavior: Git LFS is
+  listed as an install prerequisite (a clone without it yields a 134-byte
+  pointer stub, not the model), RF-DETR is documented as arriving *with* the
+  clone rather than needing `mats fetch-weights`, and `mats fetch-weights` is
+  described as the repair path it is.
+
 ### Added
 - A **Robust QR setup** sidebar page that explains the optional pyzbar and
   QReader fallbacks, reports their usable status, and keeps Conda optional.

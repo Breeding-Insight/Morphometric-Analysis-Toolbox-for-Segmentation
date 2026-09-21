@@ -72,6 +72,7 @@ from .paths import (
 from .devices import available_cpu_workers, birefnet_device_report, worker_risk_report
 
 RF_DETR_MARKER_RESOLUTION = 1120
+RF_DETR_MARKER_POSITIONAL_ENCODING_SIZE = 44
 RF_DETR_MARKER_CONFIDENCE = 0.5
 RF_DETR_MARKER_PAD_COLOR = (0, 0, 0)
 BIREFNET_IMAGE_SIZE = 2048
@@ -116,6 +117,10 @@ def get_marker_model(device_override=None):
             checkpoint = weights.ensure_weight("rf-detr")  # resolves or auto-fetches once
             model = RFDETRLarge(
                 resolution=RF_DETR_MARKER_RESOLUTION,
+                # Trial 00168 was trained at 1120 px with a learned 44 x 44
+                # positional-embedding grid, interpolated during inference.
+                positional_encoding_size=RF_DETR_MARKER_POSITIONAL_ENCODING_SIZE,
+                num_classes=1,
                 pretrain_weights=str(checkpoint),
                 device=device,
             )

@@ -11,7 +11,8 @@ LOGO_MARK = ASSETS_DIR / "mats_mark_circles_color.svg"
 # st.logo's biggest built-in size ("large") renders at 2rem; override it to
 # stay legible at header scale.
 _LOGO_HEIGHT = "8rem"
-_SIDEBAR_LOGO_TOP_OFFSET = "0.5rem"
+_SIDEBAR_LOGO_TOP_OFFSET = "2rem"
+_SIDEBAR_NAV_TOP_GAP = "0.5rem"
 
 # The collapsed-state header icon (stHeaderLogo) lives in a fixed 3.75rem
 # header bar, so it gets its own modest size -- not the sidebar's 8rem -- plus
@@ -34,6 +35,9 @@ _LOGO_CSS = f"""
 }}
 [data-testid="stLogoSpacer"] {{
     height: calc({_LOGO_HEIGHT} + {_SIDEBAR_LOGO_TOP_OFFSET}) !important;
+}}
+[data-testid="stSidebarNav"] {{
+    padding-top: {_SIDEBAR_NAV_TOP_GAP} !important;
 }}
 [data-testid="stHeaderLogo"] {{
     height: {_HEADER_LOGO_HEIGHT} !important;
