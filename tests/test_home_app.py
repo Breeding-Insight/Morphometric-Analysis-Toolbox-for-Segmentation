@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 # Every heavy import is gated: CI installs with `--no-deps`, so a bare
