@@ -1,4 +1,4 @@
-# MATS — Morphometric Analysis Toolbox
+# MATS — Morphometric Analysis Toolbox for Segmentation
 
 Measure leaf **area, length, and width** in real-world units from a photo of
 leaves laid on a printed calibration template.
