@@ -1,11 +1,13 @@
 """Install, verify and resolve the MATs model checkpoints.
 
 The checkpoints are large (RF-DETR ~134 MB, BiRefNet ~2.65 GB) and are
-delivered through two independent channels, plus a shared-filesystem escape
-hatch -- :mod:`mats.paths` resolves to whichever channel produces a real file:
+delivered through Git LFS or an optional Hugging Face configuration, plus a
+shared-filesystem escape hatch -- :mod:`mats.paths` resolves to whichever
+channel produces a real file:
 
-1. **Hugging Face Hub** -- the default public host. Free, no account needed,
-   but unreachable on some institutional networks (notably USDA's).
+1. **Hugging Face Hub** -- available only when a MATS weights repository is
+   configured. It is free and needs no account, but is unreachable on some
+   institutional networks (notably USDA's).
 2. **Git LFS** -- The default clone and pull exclude BiRefNet, so RF-DETR is
    available without an automatic 2.65 GB download. Install BiRefNet explicitly
    with ``mats fetch-weights --only birefnet --source lfs``. This channel exists
@@ -549,8 +551,8 @@ def ensure_weight(name):
         raise FileNotFoundError(
             f"{spec['filename']} not found and auto-fetch is disabled "
             f"({_AUTO_FETCH_DISABLED} is set). Pre-stage the weights, or run "
-            f"`mats fetch-weights --only {name} --source lfs` after unsetting "
-            f"{_AUTO_FETCH_DISABLED}. From a Git checkout, run "
+            f"`mats fetch-weights --only {name}` after unsetting "
+            f"{_AUTO_FETCH_DISABLED}. From a Git checkout with Git LFS, run "
             f"`{_lfs_manual_command(name)}`."
         )
 
@@ -589,8 +591,9 @@ def require_local_weight(name):
         )
     raise FileNotFoundError(
         f"{_MANIFEST[name]['filename']} is not installed locally. "
-        f"BiRefNet is optional; install it explicitly with "
-        f"`mats fetch-weights --only {name} --source lfs`, or place it at {status.path}."
+        f"BiRefNet is optional; from a Git checkout with Git LFS, install it "
+        f"explicitly with `mats fetch-weights --only {name} --source lfs`, or "
+        f"place it at {status.path}."
     )
 
 

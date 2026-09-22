@@ -159,7 +159,8 @@ def test_ensure_weight_honors_no_auto_fetch(
     with pytest.raises(FileNotFoundError, match="auto-fetch is disabled") as exc_info:
         weights.ensure_weight(name)
     message = str(exc_info.value)
-    assert f"--only {name} --source lfs" in message
+    assert f"mats fetch-weights --only {name}" in message
+    assert "From a Git checkout with Git LFS" in message
     assert command in message
     assert forbidden not in message
 

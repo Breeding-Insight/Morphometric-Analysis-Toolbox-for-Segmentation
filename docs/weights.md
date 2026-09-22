@@ -58,9 +58,11 @@ mats doctor                              # show resolved paths, channels, and so
 ```
 
 After a clone made with Git LFS installed, bare `mats fetch-weights` is a no-op
-that prints "already present" — RF-DETR arrived with the checkout. The command
-exists to repair a checkout made *without* Git LFS, and to populate a shared
-`MATS_WEIGHTS_DIR`.
+that prints "already present" — RF-DETR arrived with the checkout. The Git LFS
+channel repairs a checkout made *without* Git LFS and always writes to that
+checkout's `weights/` directory. `MATS_WEIGHTS_DIR` controls where MATS looks
+for pre-staged files; provision a shared directory by copying verified
+checkpoints there rather than expecting a Git LFS fetch to populate it.
 
 BiRefNet is never downloaded automatically. If it is absent when selected,
 MATs reports the missing local checkpoint and leaves Otsu fully usable.
@@ -78,7 +80,7 @@ only option that needs no per-user download at all:
 
 ```bash
 export MATS_WEIGHTS_DIR=/project/<your_project>/mats_weights
-mats fetch-weights --all    # populates it once (from a data-transfer node)
+# Pre-stage the verified checkpoint files in this directory.
 mats doctor                 # confirm it resolves
 ```
 
