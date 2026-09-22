@@ -57,7 +57,9 @@ mats fetch-weights --only birefnet --source lfs # explicitly fetch just BiRefNet
 mats fetch-weights --force         # re-download even if present
 ```
 
-Downloads to `~/.cache/mats/weights` (or `$MATS_WEIGHTS_DIR`). See
+Git LFS downloads write to the Git checkout's `weights/` directory.
+`MATS_WEIGHTS_DIR` is for pre-staged local or shared checkpoints; a configured
+Hugging Face source may use it as its download destination. See
 [weights.md](weights.md).
 
 ## `mats doctor`
