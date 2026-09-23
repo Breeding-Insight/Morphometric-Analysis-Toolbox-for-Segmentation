@@ -75,8 +75,9 @@ other system libraries (QR codes are decoded with OpenCV).
 > fresh checkout fails to detect markers, and it looks like a model problem
 > rather than a setup problem. Verify with `ls -l weights/rf_detr_marker.pth`
 > (~134 MB, not ~134 bytes) or `mats doctor`; repair with
-> `git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"` — the `--exclude` matters: a bare `git lfs pull` can also
-> fetch the 2.65 GB BiRefNet checkpoint.
+> `git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"` — the `--exclude` keeps the repair to RF-DETR. With
+> `.lfsconfig` active, a bare `git lfs pull` also leaves the 2.65 GB BiRefNet checkpoint out; fetch it only with
+> `git lfs pull -X "" -I "weights/birefnet_leaf.pth"` (or `mats fetch-weights --only birefnet --source lfs`).
 
 ```bash
 git lfs install             # one-time, per machine, BEFORE cloning

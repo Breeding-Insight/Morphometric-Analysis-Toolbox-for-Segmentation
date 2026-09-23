@@ -13,12 +13,16 @@ compute node and exposes it through the Open OnDemand reverse proxy.
    ```
    Then set `CONDA_ENV` in `template/script.sh.erb` to that env name (`mats`).
    (A plain virtualenv works too — the default install needs no system libs.)
-2. **The model checkpoints.** Fetch them once, ideally to a shared location:
+2. **The model checkpoints.** Pre-stage them once in a shared location. From a
+   Git checkout with Git LFS installed, materialize the files, then copy them to
+   the shared directory:
    ```bash
    export MATS_WEIGHTS_DIR=/shared/models/mats
-   mats fetch-weights --all   # RF-DETR + BiRefNet (the GUI defaults to Otsu, but a
-                              # GPU-backed OOD app is the typical BiRefNet use case)
-   mats doctor            # confirm they resolve
+   mkdir -p "$MATS_WEIGHTS_DIR"
+   mats fetch-weights --all   # writes RF-DETR + BiRefNet to the checkout's weights/
+   cp weights/rf_detr_marker.pth "$MATS_WEIGHTS_DIR/"
+   cp weights/birefnet_leaf.pth "$MATS_WEIGHTS_DIR/"
+   mats doctor                 # confirm they resolve
    ```
    Point the same `MATS_WEIGHTS_DIR` at that path in `template/script.sh.erb`.
 3. *(Optional)* Enhanced QR reading (`pip install -e ".[qr]"`) adds the `pyzbar`

@@ -12,15 +12,21 @@ conda env create -f environment.yml
 conda activate mats
 pip install -e ".[app]"
 export MATS_WEIGHTS_DIR=/project/<your_project>/mats_weights   # shared, readable
-mats fetch-weights --all      # populate both checkpoints once, from a data-transfer node
+mkdir -p "$MATS_WEIGHTS_DIR"
+# Run from a Git checkout with Git LFS installed. It materializes both files
+# in that checkout's weights/ directory; copy the verified files to /project.
+mats fetch-weights --all
+cp weights/rf_detr_marker.pth "$MATS_WEIGHTS_DIR/"
+cp weights/birefnet_leaf.pth "$MATS_WEIGHTS_DIR/"
 mats doctor
 ```
 
 On USDA **SCINet** (Ceres/Atlas), a `/project` directory is a mounted filesystem
 shared across the project, so every job reads the weights in place — no per-user
-copy. Fetch them once to that path and point `MATS_WEIGHTS_DIR` at it for all
-users. External collaborators without SCINet accounts can pull the same directory
-via a **Globus guest collection** (they need a free Globus login).
+copy. Materialize the weights once in a Git checkout, copy the verified files to
+that path, and point `MATS_WEIGHTS_DIR` at it for all users. External collaborators
+without SCINet accounts can pull the same directory via a **Globus guest collection**
+(they need a free Globus login).
 
 Set `MATS_NO_AUTO_FETCH=1` in your jobs so a misconfigured path fails fast with a
 clear error instead of triggering a 2.65 GB download on a login or compute node

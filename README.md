@@ -1,4 +1,4 @@
-# MATS — Morphometric Analysis Toolbox
+# MATS — Morphometric Analysis Toolbox for Segmentation
 
 Measure leaf **area, length, and width** in real-world units from a photo of
 leaves laid on a printed calibration template.
@@ -68,8 +68,7 @@ ls -l weights/rf_detr_marker.pth
 
 **Already cloned without Git LFS?** No need to start over — install Git LFS as
 above, then repair the checkout in place. The `--exclude` keeps this to the
-~134 MB RF-DETR file; a bare `git lfs pull` can also fetch the 2.65 GB BiRefNet
-checkpoint:
+~134 MB RF-DETR file, avoiding the optional 2.65 GB BiRefNet checkpoint:
 
 ```bash
 git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"
@@ -148,12 +147,14 @@ checkpoint or install the pyzbar/QReader robust-QR fallbacks.
 
 The required ~134 MB RF-DETR marker checkpoint is different: it is mandatory for
 every run, so it ships **in the clone** via Git LFS and needs no separate
-download step. If it is ever missing — a clone made without Git LFS, or an
-install outside a Git checkout — MATS fetches it once on first use and prints
-`Fetching weights/rf_detr_marker.pth via Git LFS ...` while it does. Set
-`MATS_NO_AUTO_FETCH=1` to turn that off and require pre-staged weights instead
-(recommended on HPC login nodes). The app never does this silently: a missing
-RF-DETR checkpoint is a blocking Preflight error.
+download step. If it is missing from a Git checkout — for example, after cloning
+without Git LFS — MATS can fetch it once on first use and prints
+`Fetching weights/rf_detr_marker.pth via Git LFS ...` while it does. An install
+outside a Git checkout must use a pre-staged checkpoint (or a separately
+configured Hugging Face source). Set `MATS_NO_AUTO_FETCH=1` to turn automatic
+fetching off and require pre-staged weights instead (recommended on HPC login
+nodes). The app never does this silently: a missing RF-DETR checkpoint is a
+blocking Preflight error.
 
 This keeps the initial network and disk footprint predictable, avoids native
 `zbar` failures on managed machines, and works better on HPC systems and

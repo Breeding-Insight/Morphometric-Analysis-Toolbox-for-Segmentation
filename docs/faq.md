@@ -37,8 +37,13 @@ Repair an existing clone without re-cloning:
 git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"
 ```
 
-The `--exclude` keeps the repair to the ~134 MB RF-DETR file; a bare
-`git lfs pull` can also fetch the 2.65 GB BiRefNet checkpoint.
+The `--exclude` keeps the repair to the ~134 MB RF-DETR file. With this
+repository's `lfs.fetchexclude`, a bare `git lfs pull` also leaves the 2.65 GB
+BiRefNet checkpoint out; fetch it explicitly only when needed:
+
+```bash
+git lfs pull -X "" -I "weights/birefnet_leaf.pth"
+```
 
 **Do I need to download the model first?** No. The clone brings RF-DETR with it,
 so there is no separate download step — run `mats doctor` and you're done. (If
