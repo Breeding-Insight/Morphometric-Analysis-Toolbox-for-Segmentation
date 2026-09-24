@@ -15,6 +15,16 @@ import argparse
 import os
 import sys
 
+from .mask_settings import (
+    CLEAN_MARGIN_DEFAULT,
+    CLEAN_MARGIN_MAX,
+    STRAY_GAP_DEFAULT,
+    STRAY_GAP_MAX,
+    checked_clean_margin,
+    checked_stray_gap,
+)
+from .thresholds import parse_threshold_level, threshold_value_for
+
 _RUN_SUBCOMMAND = "run"
 _SUBCOMMANDS = {"run", "app", "fetch-weights", "doctor"}
 
@@ -22,6 +32,27 @@ _SUBCOMMANDS = {"run", "app", "fetch-weights", "doctor"}
 def _fail(message, code=2):
     print(f"error: {message}", file=sys.stderr)
     raise SystemExit(code)
+
+
+def _threshold_level_arg(text):
+    try:
+        return parse_threshold_level(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
+def _stray_gap_arg(text):
+    try:
+        return checked_stray_gap(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
+def _clean_margin_arg(text):
+    try:
+        return checked_clean_margin(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
 
 
 def build_parser():
@@ -60,22 +91,56 @@ def build_parser():
     )
     run.add_argument('--output-mode', choices=('masks', 'target-boxes'), default='masks',
                      help='Produce segmentation masks, or only perspective-corrected target boxes.')
-    run.add_argument('--mask-method', choices=('threshold', 'birefnet'), default='threshold',
+    run.add_argument('--mask-method', choices=('threshold', 'birefnet', 'both'), default='threshold',
                      help='Mask method when --output-mode masks. threshold (Otsu) is fast, needs '
                           'no GPU and no extra download; birefnet is more accurate on cluttered '
                           'backgrounds but needs a locally installed ~2.65 GB checkpoint '
-                          '(`mats fetch-weights --only birefnet --source lfs`).')
-    run.add_argument('--threshold-level', choices=('auto', 'low', 'medium', 'high'), default='auto',
-                     help="For --mask-method threshold: auto uses Otsu (recommended); "
-                          "low=100, medium=125, high=150.")
+                          '(`mats fetch-weights --only birefnet --source lfs`); both measures every '
+                          'image with each method and writes one CSV per method, suffixed '
+                          '_threshold and _birefnet.')
+    run.add_argument('--threshold-level', type=_threshold_level_arg, default='auto',
+                     metavar='{auto,low,medium,high,1-255}',
+                     help="Cutoff for --mask-method threshold and threshold pre-cleanup exports: "
+                          "auto uses Otsu (recommended); low=100, medium=125, high=150; or an "
+                          "integer 1-255 for a custom cutoff. Grayscale pixels at or below the "
+                          "cutoff are counted as leaf.")
     run.add_argument('--csv-schema', choices=('full', 'compact'), default='full',
                      help='full = area/width/length plus per-axis pixels-per-unit and scale_aspect_ratio '
                           '(research schema); compact = sample_id, area, width, length.')
     run.add_argument('--results-unit', choices=('mm', 'cm', 'in'), default='cm',
                      help='Unit for area, width, length, and pixels-per-unit columns in the CSV '
                           '(default: cm).')
+    run.add_argument('--measure-pre-cleanup', action='store_true',
+                     help='Derive area, width, and length from the raw binary mask before '
+                          'gap closing and hole filling. A band --clean-margin wide along the '
+                          'target-box edge (where the printed box outline lands) is cleared, '
+                          'the largest object is the leaf, and other pieces are dropped when '
+                          'they touch that band or lie farther from the leaf than --stray-gap.')
+    run.add_argument('--clean-margin', type=_clean_margin_arg, default=CLEAN_MARGIN_DEFAULT,
+                     metavar='PERCENT',
+                     help='With --measure-pre-cleanup: width of the band cleared along every '
+                          'target-box edge, as a percent of the box\'s shorter side '
+                          f'(0-{CLEAN_MARGIN_MAX:g}; 0 clears nothing; '
+                          f'default {CLEAN_MARGIN_DEFAULT:g}).')
+    run.add_argument('--stray-gap', type=_stray_gap_arg, default=STRAY_GAP_DEFAULT,
+                     metavar='FRACTION',
+                     help='With --measure-pre-cleanup: drop pieces whose nearest pixel is '
+                          'farther from the leaf than this fraction of the leaf\'s '
+                          f'bounding-box diagonal (0-{STRAY_GAP_MAX:g}; 0 keeps only the leaf; '
+                          f'default {STRAY_GAP_DEFAULT:g}).')
     run.add_argument('--save-axes', action='store_true',
                      help='Also save per-image length/width measurement-axis overlays for QC.')
+    run.add_argument('--export', action='append', choices=('pre-cleanup', 'overlay', 'cutout', 'axes'),
+                     default=[], help='Additional image export; repeat for multiple kinds.')
+    run.add_argument('--pre-cleanup-methods', choices=('selected', 'threshold', 'birefnet', 'both'),
+                     default='selected', help='Methods whose binary masks are saved before cleanup; '
+                          'selected = every --mask-method method.')
+    run.add_argument('--no-target-boxes', action='store_true',
+                     help='Do not save new perspective-corrected target-box images.')
+    run.add_argument('--no-masks', action='store_true',
+                     help='Do not save the cleaned measurement masks.')
+    run.add_argument('--no-failure-log', action='store_true',
+                     help='Do not write the failures/warnings CSV.')
 
     app = sub.add_parser('app', help='Launch the Streamlit GUI.')
     app.add_argument('extra', nargs=argparse.REMAINDER,
@@ -112,18 +177,50 @@ def _normalize_argv(argv):
     return [_RUN_SUBCOMMAND] + argv
 
 
+def _measured_methods(args):
+    """The methods this run measures with, in output order."""
+    return ('threshold', 'birefnet') if args.mask_method == 'both' else (args.mask_method,)
+
+
+def _pre_cleanup_methods(args):
+    """The methods whose pre-cleanup masks this run exports."""
+    if 'pre-cleanup' not in args.export:
+        return ()
+    if args.pre_cleanup_methods == 'selected':
+        return _measured_methods(args)
+    if args.pre_cleanup_methods == 'both':
+        return ('threshold', 'birefnet')
+    return (args.pre_cleanup_methods,)
+
+
+def _uses_threshold(args):
+    """Whether this run thresholds for measurements or a pre-cleanup export."""
+    return 'threshold' in _measured_methods(args) + _pre_cleanup_methods(args)
+
+
 def _print_run_banner(args, threshold_value):
     print(f"\nOutput mode: {args.output_mode}")
     print("Scale: independent per-axis pixels-per-cm (anisotropic)")
     if args.output_mode == "masks":
         print(f"Mask method: {args.mask_method}")
-        if args.mask_method == "threshold":
+        print(f"Measurement source: {'pre-cleanup' if args.measure_pre_cleanup else 'cleaned'}")
+        if args.measure_pre_cleanup:
+            print(f"Clean margin: {args.clean_margin:g}% of the target box's shorter side")
+            print(f"Stray gap: {args.stray_gap:g} x leaf bounding-box diagonal")
+        if _uses_threshold(args):
             if args.threshold_level == "auto":
                 print("Threshold level: auto (Otsu's method)")
+            elif isinstance(args.threshold_level, int):
+                print(f"Threshold level: custom ({threshold_value})")
             else:
                 print(f"Threshold level: {args.threshold_level} ({threshold_value})")
     else:
         print("Mask method and threshold level ignored because output mode is target-boxes.")
+    print(f"Additional exports: {', '.join(args.export) if args.export else 'none'}")
+    if args.output_mode == "target-boxes" and args.export:
+        print("Segmentation exports ignored because output mode is target-boxes.")
+    elif 'pre-cleanup' in args.export:
+        print(f"Pre-cleanup methods: {args.pre_cleanup_methods}")
 
 
 def _resolve_template_dims(args, lm):
@@ -215,7 +312,9 @@ def _make_progress_callback():
 
 def _require_local_birefnet_for_run(args):
     """Stop once, before a batch, when optional BiRefNet is unavailable."""
-    if args.output_mode != "masks" or args.mask_method != "birefnet":
+    if args.output_mode != "masks" or (
+        'birefnet' not in _measured_methods(args) + _pre_cleanup_methods(args)
+    ):
         return
     from . import weights
     from .birefnet_runtime import require_birefnet_dependencies
@@ -230,13 +329,26 @@ def _require_local_birefnet_for_run(args):
 def _cmd_run(args):
     from . import core as lm
 
+    if args.output_mode != 'masks' and args.measure_pre_cleanup:
+        _fail('--measure-pre-cleanup requires --output-mode masks')
+    if args.pre_cleanup_methods != 'selected' and 'pre-cleanup' not in args.export:
+        _fail('--pre-cleanup-methods requires --export pre-cleanup')
+    if args.stray_gap != STRAY_GAP_DEFAULT and not args.measure_pre_cleanup:
+        _fail('--stray-gap requires --measure-pre-cleanup')
+    if args.clean_margin != CLEAN_MARGIN_DEFAULT and not args.measure_pre_cleanup:
+        _fail('--clean-margin requires --measure-pre-cleanup')
     _require_local_birefnet_for_run(args)
     template_dims = _resolve_template_dims(args, lm)
-    threshold_value = lm.THRESHOLD_LEVELS[args.threshold_level]
+    threshold_value = threshold_value_for(args.threshold_level)
     _print_run_banner(args, threshold_value)
 
     results_path = args.results_path or os.path.join(os.getcwd(), "leaf_morpho_results.csv")
-    print("\nMeasurement CSV will be written to:", results_path)
+    if args.output_mode == "masks" and len(_measured_methods(args)) > 1:
+        print("\nMeasurement CSVs will be written to:")
+        for method in _measured_methods(args):
+            print(f"  {method}: {lm.method_suffixed_path(results_path, method)}")
+    else:
+        print("\nMeasurement CSV will be written to:", results_path)
 
     input_dir = _resolve_input_dir(args)
     input_images = lm.get_input_images(input_dir)
@@ -245,6 +357,14 @@ def _cmd_run(args):
     print(f"Found {len(input_images)} image(s).")
 
     output_dir = _resolve_output_dir(args)
+    export_options = {
+        'target_boxes': not args.no_target_boxes,
+        'cleaned_masks': not args.no_masks,
+        'pre_cleanup_methods': _pre_cleanup_methods(args),
+        'overlay': 'overlay' in args.export,
+        'cutout': 'cutout' in args.export,
+        'axes': args.save_axes or 'axes' in args.export,
+    }
 
     result = lm.run_leaf_morpho_batch(
         input_images=input_images,
@@ -255,16 +375,28 @@ def _cmd_run(args):
         mask_method=args.mask_method,
         threshold_value=threshold_value,
         workers=args.workers,
-        write_failures=True,
+        write_failures=not args.no_failure_log,
         compact_csv=(args.csv_schema == "compact"),
         results_unit=args.results_unit,
         save_measurement_axes=args.save_axes,
         serialize_model_inference=False,
         progress_callback=_make_progress_callback(),
+        export_options=export_options,
+        measurement_source='pre-cleanup' if args.measure_pre_cleanup else 'cleaned',
+        stray_gap=args.stray_gap,
+        clean_margin=args.clean_margin,
     )
 
     print(f"\nDone. {result['succeeded']} succeeded, {result['failed']} failed "
           f"({result['workers']} worker(s): {result['worker_reason']}).")
+    if len(result["methods"]) > 1:
+        for method in result["methods"]:
+            outcome = result["by_method"][method]
+            print(f"{method}: {outcome['succeeded']} succeeded, {outcome['failed']} failed.")
+            print(f"  Measurement CSV written to: {outcome['results_path']}")
+            if outcome["failure_report_path"]:
+                print(f"  Failure report written to: {outcome['failure_report_path']}")
+        return 0
     print(f"Measurement CSV written to: {result['results_path']}")
     if result.get("failure_report_path"):
         print(f"Failure report written to: {result['failure_report_path']}")

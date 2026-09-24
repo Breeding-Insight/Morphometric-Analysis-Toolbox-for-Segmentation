@@ -58,7 +58,13 @@ except Exception as exc:
     st.stop()
 
 mask_method = selected_mask_method()
-method_label = "BiRefNet" if mask_method == "birefnet" else "Classic thresholding (Otsu)"
+if mask_method == "birefnet":
+    method_label = (
+        "Classic thresholding + BiRefNet"
+        if st.session_state.get("segment_threshold", True) else "BiRefNet"
+    )
+else:
+    method_label = "Classic thresholding"
 settings = get_compute_settings(lm)
 available_workers = settings.available_workers
 birefnet_unlocked = birefnet_parallel_unlocked(available_workers)

@@ -6,6 +6,35 @@ All notable changes to MATs are documented here. This project adheres to
 ## [Unreleased]
 
 ### Changed
+- Adjust now lists specimens in a searchable measurement table with sortable
+  columns. Clicking a row (its **View** button) previews that specimen; for Otsu
+  runs, ticking **Marked for Adjustment** marks it, and marks persist across
+  searches. Its duplicate
+  measurement cards and saved-image viewer have been removed, leaving the
+  controls and live preview.
+- **Remove flashfill from this preview** now sits under **Clean size** inside
+  **Explore and adjust output**.
+- Adjust saves marked specimens with its own **Overwrite all marked specimens
+  (N)** button, below **Overwrite this specimen** (the specimen in View),
+  replacing the "Apply these adjustments to all marked specimens" checkbox.
+- Analyze now makes the Classic thresholding/BiRefNet comparison switch explicit
+  and keeps each method's table selection separate, so the specimen viewer
+  always follows the active method's table.
+- Setup now places threshold level directly under Classic thresholding and
+  labels the default method without the Otsu parenthetical.
+- The Analyze measurement table and selected-specimen viewer occupy separate
+  full-width blocks. Interactive controls now live in the Adjust tab.
+- Analyze shows only the specimen selected in the measurement table. Adjust
+  carries that selection into its preview and overwrite controls.
+- The Analyze sample viewer now shows the raw or cleaned mask used for the
+  completed run, even when that image was not selected for export.
+- The app's segmentation choice is now two checkboxes. **Threshold level**
+  appears only while Otsu is checked, and a single **Pre-cleanup masks** export
+  covers every checked method.
+- The workbench now uses Setup, Analyze, Adjust, and Export, with Diagnostics
+  in the sidebar. Image exports are selected before a run; downloads include
+  only files recorded for that run.
+- Target boxes and cleaned masks remain default exports but can be disabled.
 - Documentation now matches the shipped weights-delivery behavior: Git LFS is
   listed as an install prerequisite (a clone without it yields a 134-byte
   pointer stub, not the model), RF-DETR is documented as arriving *with* the
@@ -13,6 +42,42 @@ All notable changes to MATs are documented here. This project adheres to
   described as the repair path it is.
 
 ### Added
+- An interactive threshold preview for the selected Otsu sample in Adjust.
+  Dragging updates its raw mask, and a color panel of the masked leaf beside
+  it, immediately; releasing applies the existing
+  cleanup when cleaned measurements are selected. A chosen cutoff can be used
+  for the next run or overwrite the selected specimen's mask, measurement row,
+  and dependent images with one button. Marked specimens can receive the same
+  settings in one bulk save, each using its own calibration.
+- A preview-only **Clean size** slider in Adjust's Explore and adjust box,
+  for Otsu and BiRefNet specimens. It starts at 0 (the run's usual mask);
+  above 0 it live-previews Clean image, which drops small white specks and
+  fills small enclosed holes without flash-filling the leaf.
+- Optional measurements from pre-cleanup binary masks in the app and CLI
+  (`--measure-pre-cleanup`), with per-CSV metadata recording the source.
+  A band along the target-box edge (`--clean-margin`, **Edge margin** in the
+  app; default 1% of the box's shorter side) is cleared first, so the
+  template's printed box outline can never outweigh and replace a small leaf.
+  The largest remaining object then anchors the measurement: pieces touching
+  that band, or farther from the leaf than `--stray-gap` (**Stray-piece
+  distance**; default 0.25 × the leaf's bounding-box diagonal), are dropped so
+  printed box lines and distant debris no longer stretch width and length.
+  Clean image (a clean size above 0), Remove flashfill, and the pre-cleanup
+  threshold explorer apply
+  the same cleanup; the default cleaned measurements are unchanged. In Setup
+  both settings are grayed out unless pre-cleanup measurement is checked; each
+  specimen's explorer can adjust them for its own preview and overwrite.
+- Measure with Otsu and BiRefNet in one run: `--mask-method both`, or check both
+  segmentation methods in the app. Markers are detected once per image; each
+  method writes its own results CSV and failure log (`_threshold`/`_birefnet`
+  suffixes) in the single-method schema, and the Results view can switch
+  between them. Single-method runs write the same files as before.
+- Separate pre-cleanup binary mask exports for threshold/Otsu and BiRefNet,
+  including both methods in one run while measurements use the selected method.
+- Optional overlay, cutout, and measurement-axis exports in the CLI and app.
+- A custom grayscale threshold: `--threshold-level` accepts an integer cutoff
+  `1`–`255`, and the app's **custom** threshold level shows a slider with the
+  low/medium/high presets marked.
 - A **Robust QR setup** sidebar page that explains the optional pyzbar and
   QReader fallbacks, reports their usable status, and keeps Conda optional.
 - A **Help** page in the app (sidebar) with a quick start, a photography guide

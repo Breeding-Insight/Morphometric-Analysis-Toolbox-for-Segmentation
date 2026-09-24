@@ -27,12 +27,58 @@ mats run -i ./images -o ./out -r results.csv --sheet-dimensions 12x12in
 | `--sheet-dimensions` | Finished Template Creator sheet size as `<w>x<h><unit>`, e.g. `12x12in` or `30x30cm`; MATS derives calibration using Creator margins. | read from QR |
 | `-t, --template_dimensions, --template-dimensions` | Legacy/custom marker-centre calibration area. Retained for existing scripts and non-Creator sheets. | unused |
 | `--output-mode` | `masks` (segment leaves) or `target-boxes` (only save corrected boxes). | `masks` |
-| `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast). | `threshold` |
-| `--threshold-level` | For `threshold`: `auto` (Otsu), `low` (100), `medium` (125), `high` (150). | `auto` |
+| `--mask-method` | `birefnet` (accurate, GPU), `threshold` (fast), or `both` (measure every image with each method; see below). | `threshold` |
+| `--threshold-level` | For `threshold` and threshold pre-cleanup exports: `auto` (Otsu), `low` (100), `medium` (125), `high` (150), or a custom integer cutoff `1`–`255` (e.g. `--threshold-level 140`). Grayscale pixels at or below the cutoff count as leaf. | `auto` |
 | `--csv-schema` | `full` (area/width/length + per-axis pixels-per-selected-unit) or `compact`. | `full` |
 | `--results-unit` | CSV measurement unit: `mm`, `cm`, or `in`. | `cm` |
+| `--measure-pre-cleanup` | Measure from the raw binary segmentation before gap closing and hole filling, after clearing the edge margin and dropping stray pieces (see below). | off (cleaned mask) |
+| `--clean-margin` | With `--measure-pre-cleanup`: width of the band cleared along every target-box edge, as a percent of the box's shorter side, `0`–`10`. `0` clears nothing. | `1` |
+| `--stray-gap` | With `--measure-pre-cleanup`: drop pieces whose nearest pixel is farther from the leaf than this fraction of the leaf's bounding-box diagonal, `0`–`10`. `0` keeps only the leaf. | `0.25` |
 | `-w, --workers` | Parallel workers. Only the CPU `threshold` path over pre-made target boxes parallelizes; model-backed runs use one worker. | auto |
 | `--save-axes` | Also write per-image length/width overlay images for QC. | off |
+| `--export` | Repeatable: `pre-cleanup`, `overlay`, `cutout`, `axes`. Overlays, cutouts, and axes use the selected measurement mask. | none |
+| `--pre-cleanup-methods` | With `--export pre-cleanup`: `selected` (every `--mask-method` method), `threshold`, `birefnet`, or `both`. Requesting BiRefNet runs it for every image and requires its local checkpoint. | `selected` |
+| `--no-target-boxes` | Do not save newly rectified target boxes. Existing target-box inputs are never copied. | off |
+| `--no-masks` | Do not save cleaned masks. This does not change the measurement source. | off |
+| `--no-failure-log` | Do not write `leaf_morpho_failures.csv`. | off |
+
+Pre-cleanup masks are binary segmentations before gap closing, hole filling,
+and removal of smaller objects. BiRefNet masks are already thresholded, not
+probability maps. `--pre-cleanup-methods both` writes
+`{sample_id}_mask_precleanup_threshold.png` and
+`{sample_id}_mask_precleanup_birefnet.png`. Only a `--mask-method` method
+determines area, width, and length in the CSV. With `--output-mode target-boxes`,
+segmentation exports are ignored. The results CSV is always written.
+
+`--measure-pre-cleanup` uses the selected method's raw binary mask for measurements.
+First it clears a band `--clean-margin` percent of the box's shorter side wide along
+every edge of the target box. The template's printed box outline runs through the
+marker centres, so after perspective correction it lies on that edge; clearing it
+first means the outline can never outweigh, and replace, a small leaf. The
+measurement is then anchored on the leaf, the largest remaining object. Any other
+piece that touches the cleared band (the rest of a printed line, marker remnants,
+shadows at the sheet edge) is dropped, and so is any piece farther from the leaf
+than `--stray-gap` times the leaf's bounding-box diagonal. A thin piece in the band
+is never taken as the leaf. Area counts every remaining foreground pixel,
+including specks near the leaf, while width and length span the remaining
+foreground extent. Holes remain excluded from area. Lay leaves inside the printed
+box: any part of a leaf within the margin is cleared too. Raise `--stray-gap` when
+a leaf's parts lie apart, such as separated leaflets; lower it to drop specks
+closer to the leaf.
+
+Without this flag, measurements use the cleaned mask as before. This setting is
+independent of `--export pre-cleanup`, which writes the raw mask exactly as
+segmented, stray pieces included. Each results CSV has a `.meta.json` companion
+recording its measurement source, segmentation method, unit, and schema, plus
+the clean margin and stray gap for pre-cleanup runs.
+
+`--mask-method both` detects markers once per image and then measures it with
+Otsu and with BiRefNet. Each method gets its own results CSV and failure log,
+named from `-r` with a method suffix — `leaf_morpho_results_threshold.csv` and
+`leaf_morpho_results_birefnet.csv` — in the same schema as a single-method run.
+Each method's cleaned masks, overlays, cutouts, and axes also end in
+`_threshold` or `_birefnet` (for example `{sample_id}_mask_birefnet.png`);
+target boxes are shared. A run with one method keeps the unsuffixed names.
 
 ### Interactive vs non-interactive
 

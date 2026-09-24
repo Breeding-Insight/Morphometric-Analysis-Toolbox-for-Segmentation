@@ -65,12 +65,13 @@ with st.container(border=True):
         "2. **Photograph** one specimen, flat, inside the box, with all four corner "
         "markers in frame.\n"
         "3. **Pick your folders** in the sidebar: images in, results out.\n"
-        "4. **Set the scale** in Analyze — enter the finished printed-sheet width "
+        "4. **Set the scale** in Setup — enter the finished printed-sheet width "
         "and height. MATS derives the calibrated marker-centre area using the same "
         "margins as Template Creator. Tick *Variable "
         "dimensions* to read it from each image's QR code instead; if reads are "
         "unreliable, **Robust QR setup** adds sturdier decoders.\n"
-        "5. **Run**, then read **Results** and download the CSV."
+        "5. Choose image outputs in Setup, run and read results in Analyze, "
+        "adjust specimens in Adjust, then download saved files in Export."
     )
     _page_link("pages/1_Template_Creator.py", "Open Template Creator", ":material/grid_on:")
     _page_link("pages/4_Robust_QR_Setup.py", "Open Robust QR setup", ":material/qr_code_scanner:")
@@ -260,7 +261,7 @@ with st.container(border=True):
         "— still legible despite the blur. Because this is a legacy sheet, re-run "
         "it with the compatibility calibration option "
         f"(`-t {samples.QR_FAILURE_SAMPLE['calibration_dimensions']}`, or untick "
-        "*Variable dimensions* and use **Older or custom template?** in Analyze)."
+        "*Variable dimensions* and use **Older or custom template?** in Setup)."
     )
 
 # ------------------------------------------------------- segmentation method
@@ -268,11 +269,13 @@ st.subheader("Choosing a segmentation method", anchor=False)
 otsu_column, birefnet_column = st.columns(2)
 with otsu_column:
     with st.container(border=True):
-        st.markdown("**Classic thresholding (Otsu)** — the default")
+        st.markdown("**Classic thresholding** — the default")
         st.markdown(
             "- Fast, no GPU, no extra download.\n"
             "- Separates leaf from background by brightness.\n"
             "- Right choice for the **bench** samples above.\n"
+            "- If Otsu picks the wrong cutoff, choose **custom** under Threshold "
+            "level in Setup and drag the slider.\n"
         )
 with birefnet_column:
     with st.container(border=True):
@@ -286,8 +289,11 @@ with birefnet_column:
         )
         _page_link("pages/2_BiRefNet_Setup.py", "Open BiRefNet setup", ":material/download:")
 st.caption(
-    "Start with Otsu. Switch only when the mask shown in Results is visibly "
-    "wrong — that is the signal, not the file size or the leaf species."
+    "Start with Otsu. Switch only when the mask shown in Analyze is visibly "
+    "wrong — that is the signal, not the file size or the leaf species. To "
+    "compare them on your own photos, check both methods in Setup: each image is "
+    "measured with each method, and each method gets its own results CSV "
+    "(`leaf_morpho_results_threshold.csv`, `leaf_morpho_results_birefnet.csv`)."
 )
 
 # ---------------------------------------------------------------- csv glossary
@@ -295,7 +301,7 @@ st.subheader("Reading the results CSV", anchor=False)
 with st.container(border=True):
     st.markdown("**Full research schema** (default)")
     st.caption(
-        "Choose result units in Analyze before running: `mm`, `cm` (the default), "
+        "Choose result units in Setup before running: `mm`, `cm` (the default), "
         "or `in`. The selected unit appears in every measurement and pixels-per-unit "
         "column name; the table below shows the default centimeter names."
     )
@@ -304,7 +310,7 @@ with st.container(border=True):
         "|---|---|\n"
         "| `sample_id` | Input filename without its extension. Matches "
         "`{sample_id}_target_box.jpg` and `{sample_id}_mask.png` in the output "
-        "folder. |\n"
+        "folder when those exports are selected. |\n"
         "| `leaf_area_cm2` | Segmented leaf area — mask pixel count divided by "
         "`px_per_cm_width` x `px_per_cm_height`. |\n"
         "| `width_cm` | Horizontal extent of the leaf's bounding box, divided by "
@@ -357,9 +363,46 @@ with st.container(border=True):
     )
     st.caption(
         "Unmeasurable values are written as the literal `NA`. Also written per "
-        "image: `{sample_id}_target_box.jpg` (perspective-corrected box) and "
-        "`{sample_id}_mask.png` (segmentation mask). A failures log, when "
+        "image by default: `{sample_id}_target_box.jpg` (newly perspective-corrected "
+        "box) and `{sample_id}_mask.png` (cleaned mask). Setup can "
+        "also export `{sample_id}_mask_precleanup_{method}.png` for each checked "
+        "method: binary masks before cleanup. With both methods checked, the "
+        "cleaned masks, results CSV, and failure log are written once per method, "
+        "with names ending in `_threshold` or `_birefnet`. A failures log, when "
         "enabled, lists `sample_id, input_image, stage, failure_mode, status`."
+    )
+    st.caption(
+        "Measure from pre-cleanup masks in Setup to calculate area from all raw "
+        "foreground pixels and width/length from their full extent. Each results "
+        "CSV has a `.meta.json` companion recording this choice."
+    )
+    st.caption(
+        "Select one measurement-table row to inspect that specimen. The Analyze "
+        "viewer shows the mask that produced its measurements, including when "
+        "that mask was not exported. In Adjust, check Remove flashfill under "
+        "Clean size for the selected cleaned-mask sample. The preview changes saved outputs "
+        "only after you press Overwrite. Extra previews last for this "
+        "app session."
+    )
+    st.caption(
+        "For a classic thresholding sample, use Adjust to drag "
+        "the threshold preview slider; the masked leaf beside the mask shows, in "
+        "color, which parts of the leaf the cutoff keeps. Releasing it applies "
+        "cleanup to the preview when the run measured cleaned masks. Overwrite "
+        "this specimen replaces that sample's saved mask and CSV row. To use the "
+        "same settings for several specimens, tick their Marked for Adjustment "
+        "boxes in the table. Marks stay selected across searches. "
+        "Then press Overwrite all marked specimens, below Overwrite this "
+        "specimen, to save the settings to every marked specimen. Existing "
+        "overlays, cutouts, and axes are regenerated. Clean "
+        "image, available there for BiRefNet samples too, previews dropping small "
+        "specks and filling small holes with a clean-size slider; it never changes "
+        "saved files."
+    )
+    st.caption(
+        "Export lists this run's saved files. Select Otsu, BiRefNet, or both; "
+        "choose which files go in the ZIP; or download a results CSV directly. "
+        "Changing ZIP choices does not change measurements or create new images."
     )
 
 # -------------------------------------------------------------- troubleshooting

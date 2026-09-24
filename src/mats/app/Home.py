@@ -1,6 +1,7 @@
 import csv
 import tempfile
 import traceback
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -22,6 +23,12 @@ from mats.app.folder_picker import FolderPickerError, choose_folder
 from mats.app.runtime_paths import current_python, display_path
 from mats.qr_runtime import qr_preflight_status, qr_runtime_status
 from mats.scaling import DEFAULT_RESULTS_UNIT, QR_TRACE_FIELDNAMES, RESULT_UNITS
+from mats.mask_settings import (
+    CLEAN_MARGIN_DEFAULT,
+    CLEAN_MARGIN_MAX,
+    STRAY_GAP_DEFAULT,
+    STRAY_GAP_MAX,
+)
 from mats.template_layout import (
     TemplateLayoutError,
     build_template_layout,
@@ -29,6 +36,14 @@ from mats.template_layout import (
     maximum_template_edge,
     minimum_template_edge,
     round_to_increment,
+)
+from mats.thresholds import (
+    CUSTOM_THRESHOLD_LEVEL,
+    THRESHOLD_LEVEL_OPTIONS,
+    THRESHOLD_LEVELS,
+    THRESHOLD_MAX,
+    THRESHOLD_MIN,
+    threshold_value_for,
 )
 
 
@@ -42,13 +57,43 @@ INPUT_DIR_KEY = "input_directory"
 OUTPUT_DIR_KEY = "output_directory"
 FOLDER_PICKER_ERROR_KEY = "folder_picker_error"
 INPUT_SOURCE_KEY = "input_source"
-SEGMENTATION_METHOD_KEY = "segmentation_method"
+SEGMENT_THRESHOLD_KEY = "segment_threshold"
+SEGMENT_BIREFNET_KEY = "segment_birefnet"
+# Measurement methods in output order, with their Setup checkbox keys.
+SEGMENTATION_METHOD_KEYS = {"threshold": SEGMENT_THRESHOLD_KEY, "birefnet": SEGMENT_BIREFNET_KEY}
+SEGMENTATION_METHOD_LABELS = {"threshold": "Classic thresholding", "birefnet": "BiRefNet"}
+RESULTS_METHOD_KEY = "results_method"
 THRESHOLD_LEVEL_KEY = "threshold_level"
+THRESHOLD_CUSTOM_VALUE_KEY = "threshold_custom_value"
+THRESHOLD_MARK_LABELS = {"low": "low", "medium": "med", "high": "high"}
 RESULTS_SCHEMA_KEY = "results_schema"
 RESULTS_UNIT_KEY = "results_unit"
+MEASURE_PRE_CLEANUP_KEY = "measure_pre_cleanup"
+STRAY_GAP_KEY = "stray_gap"
+CLEAN_MARGIN_KEY = "clean_margin"
 WRITE_FAILURES_KEY = "write_failures"
+EXPORT_TARGET_BOXES_KEY = "export_target_boxes"
+EXPORT_MASKS_KEY = "export_cleaned_masks"
+EXPORT_PRE_CLEANUP_KEY = "export_pre_cleanup"
+EXPORT_OVERLAY_KEY = "export_overlay"
+EXPORT_CUTOUT_KEY = "export_cutout"
+EXPORT_AXES_KEY = "export_axes"
 WORKSPACE_TAB_KEY = "analysis_workspace_tab"
 PENDING_WORKSPACE_TAB_KEY = "pending_analysis_workspace_tab"
+EXPORT_RUN_ID_KEY = "export_run_id"
+EXPORT_METHODS_KEY = "export_selected_methods"
+EXPORT_ZIP_NAME_KEY = "export_zip_name"
+EXPORT_FILE_TYPES = (
+    ("results_csv", "Results CSVs"),
+    ("results_metadata", "Measurement metadata"),
+    ("failure_log", "Failure logs"),
+    ("target_box", "Target boxes"),
+    ("mask", "Cleaned masks"),
+    ("pre_cleanup", "Pre-cleanup masks"),
+    ("overlay", "Overlays"),
+    ("cutout", "Cutouts"),
+    ("axes", "Measurement axes"),
+)
 RESULTS_DASHBOARD_MAX_ROWS = 5_000
 RESULTS_TABLE_MAX_ROWS = 1_000
 RESULTS_UNIT_LABELS = {
@@ -215,6 +260,41 @@ _WORKBENCH_STYLES = """
         transition: none;
     }
 }
+/* Preset cutoffs marked beneath the custom-threshold slider. */
+.mats-threshold-marks {
+    color: #5F6C66;
+    container-type: inline-size;
+    font-size: 0.72rem;
+    line-height: 1.15;
+    margin: -0.4rem 0.5rem 0;
+}
+.mats-threshold-track {
+    height: 2.1rem;
+    position: relative;
+}
+.mats-threshold-mark {
+    position: absolute;
+    text-align: center;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+.mats-threshold-mark::before {
+    background: #9AB0A0;
+    content: "";
+    display: block;
+    height: 0.35rem;
+    margin: 0 auto 0.1rem;
+    width: 1px;
+}
+/* In a narrow column the presets sit ~17 px apart: drop "med" to a second row. */
+@container (max-width: 300px) {
+    .mats-threshold-track {
+        height: 3.5rem;
+    }
+    .mats-threshold-mark-medium::before {
+        height: 1.75rem;
+    }
+}
 </style>
 """
 
@@ -257,8 +337,6 @@ def save_uploaded_images(uploaded_files, destination):
 
 # Guardrails so a few-hundred-image run cannot exhaust memory or overwhelm the page.
 ZIP_SIZE_WARN_BYTES = 2 * 1024 ** 3  # 2 GB
-PREVIEW_HARD_MAX = 24
-PREVIEW_AUTO_HIDE_THRESHOLD = 50
 PREVIEW_IMAGE_WIDTH = 280
 LARGE_BATCH_THRESHOLD = 200
 OVERLAY_TINT_COLOR = (255, 0, 255)  # BGR magenta -- reads clearly against green foliage
@@ -337,6 +415,59 @@ def gather_output_files(output_dir, results_path, include_overlay=False, include
     return files
 
 
+def files_from_manifest(artifacts):
+    """Select only paths this run successfully wrote, preserving run order."""
+    return [Path(item["path"]) for item in artifacts if Path(item["path"]).is_file()]
+
+
+def pairs_from_manifest(
+    artifacts, input_images=(), method=None, measurement_source="cleaned",
+    preview_artifacts=(),
+):
+    """Construct previews from this run's files and accessible pre-cropped inputs.
+
+    Use the mask that produced the measurement; private preview files fill in
+    for optional exports. Target boxes are shared by every method. A pre-cleanup
+    run measures its raw mask minus stray pieces, which only the preview mask
+    holds; its pre-cleanup export is the raw mask.
+    """
+    if measurement_source not in {"cleaned", "pre-cleanup"}:
+        raise ValueError("unknown measurement source")
+    by_sample = {}
+    raw_kinds = {"preview_raw_mask", "pre_cleanup"}
+    mask_kinds = (
+        {"preview_mask"} if measurement_source == "pre-cleanup" else {"mask", "preview_mask"}
+    )
+    # The private PNG target box preserves the exact pixels used for thresholding.
+    for item in (*artifacts, *preview_artifacts):
+        sample_id = item.get("sample_id")
+        kind = item["kind"]
+        if sample_id is None or kind not in {
+            "target_box", "preview_target_box", *mask_kinds, *raw_kinds,
+        }:
+            continue
+        if method is not None and kind in {
+            *mask_kinds, *raw_kinds,
+        } and item.get("method") != method:
+            continue
+        by_sample.setdefault(sample_id, {"sample_id": sample_id, "target_box": None, "mask": None})
+        if kind in raw_kinds:
+            by_sample[sample_id]["raw_mask"] = item["path"]
+        elif kind in mask_kinds:
+            by_sample[sample_id]["mask"] = item["path"]
+        elif kind in {"target_box", "preview_target_box"}:
+            by_sample[sample_id]["target_box"] = item["path"]
+    for path in input_images:
+        if path.endswith("_target_box.jpg") and Path(path).is_file():
+            sample_id = Path(path).stem[:-len("_target_box")]
+            if sample_id in by_sample and by_sample[sample_id]["target_box"] is None:
+                by_sample[sample_id]["target_box"] = path
+    if measurement_source == "pre-cleanup":
+        for pair in by_sample.values():
+            pair["mask_source"] = measurement_source
+    return list(by_sample.values())
+
+
 def estimate_zip_inputs(files):
     total_bytes = 0
     for path in files:
@@ -377,6 +508,25 @@ def read_results_dataframe(results_path, modified_ns, limit):
     return pd.read_csv(results_path, nrows=limit)
 
 
+def _scale_axes_by_sample(summary):
+    """Retain canonical calibration for per-specimen output adjustments."""
+    axes_by_method = {}
+    for method, outcome in summary["by_method"].items():
+        axes_by_sample = {}
+        for row in outcome["result_rows"]:
+            try:
+                axes = (
+                    float(row["px_per_cm_width"]),
+                    float(row["px_per_cm_height"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            if all(np.isfinite(value) and value > 0 for value in axes):
+                axes_by_sample[str(row["sample_id"])] = axes
+        axes_by_method[method] = axes_by_sample
+    return axes_by_method
+
+
 def normalize_measurements(frame, results_unit=DEFAULT_RESULTS_UNIT):
     """Return numeric, consistently named measurements from either CSV schema."""
     if results_unit not in RESULT_UNITS:
@@ -402,6 +552,37 @@ def normalize_measurements(frame, results_unit=DEFAULT_RESULTS_UNIT):
         if column in measurements:
             measurements[column] = pd.to_numeric(measurements[column], errors="coerce")
     return measurements.dropna(subset=("leaf_area", "width", "length"))
+
+
+def _unit_symbols(run):
+    """Return the length and area unit labels for a run's results."""
+    results_unit = run.get("results_unit", DEFAULT_RESULTS_UNIT)
+    if results_unit not in RESULT_UNITS:
+        results_unit = DEFAULT_RESULTS_UNIT
+    unit_symbol = RESULTS_UNIT_SYMBOLS[results_unit]
+    return unit_symbol, f"{unit_symbol}²"
+
+
+def _measurement_columns(unit_symbol="cm", area_symbol="cm²"):
+    """(column, label, decimals) shared by the Analyze and Adjust tables; None is text."""
+    return [
+        ("sample_id", "Sample", None),
+        ("leaf_area", f"Leaf area ({area_symbol})", 2),
+        ("width", f"Leaf width ({unit_symbol})", 2),
+        ("length", f"Leaf length ({unit_symbol})", 2),
+        ("scale_aspect_ratio", "Scale axis ratio", 3),
+    ]
+
+
+def _measurement_column_config(unit_symbol="cm", area_symbol="cm²"):
+    """Streamlit column config for the Analyze measurement table."""
+    return {
+        column: (
+            st.column_config.TextColumn(label, pinned=True) if decimals is None
+            else st.column_config.NumberColumn(label, format=f"%.{decimals}f")
+        )
+        for column, label, decimals in _measurement_columns(unit_symbol, area_symbol)
+    }
 
 
 def summarize_measurements(measurements):
@@ -546,6 +727,22 @@ def _layout_conversion_label(layout):
     )
 
 
+def _threshold_marks_html():
+    """Mark the low/medium/high preset cutoffs beneath the custom-threshold slider."""
+    span = THRESHOLD_MAX - THRESHOLD_MIN
+    marks = "".join(
+        f'<span class="mats-threshold-mark mats-threshold-mark-{name}" '
+        f'style="left: {(value - THRESHOLD_MIN) / span * 100:.2f}%">'
+        f"{THRESHOLD_MARK_LABELS[name]}<br>{value}</span>"
+        for name, value in THRESHOLD_LEVELS.items()
+        if value is not None
+    )
+    return (
+        '<div class="mats-threshold-marks">'
+        f'<div class="mats-threshold-track">{marks}</div></div>'
+    )
+
+
 def _choose_folder(widget_key, title):
     """Open a local desktop picker and copy the result into a path widget."""
     try:
@@ -561,14 +758,14 @@ def _choose_folder(widget_key, title):
         st.session_state[widget_key] = selected
 
 
-def _open_diagnostics():
-    """Open the detailed preflight tab on the next Streamlit rerun."""
-    st.session_state[WORKSPACE_TAB_KEY] = "Diagnostics"
-
-
 def _switch_workspace_tab(tab_name):
     """Open a named workspace tab through its stateful Streamlit key."""
     st.session_state[WORKSPACE_TAB_KEY] = tab_name
+
+
+def _open_export():
+    """Open the Export workspace from the sidebar."""
+    st.session_state[WORKSPACE_TAB_KEY] = "Export"
 
 
 def apply_pending_workspace_tab():
@@ -583,10 +780,10 @@ def render_workspace_navigation():
     with st.container(key="workspace_navigation_intro"):
         st.markdown("**WORKSPACE NAVIGATION**")
         st.caption(
-            "Move between analysis setup, measurement results, and system diagnostics."
+            "Set up, analyze, adjust specimens, then export saved results."
         )
     return st.tabs(
-        ["Analyze", "Results", "Diagnostics"],
+        ["Setup", "Analyze", "Adjust", "Export"],
         key=WORKSPACE_TAB_KEY,
         on_change="rerun",
     )
@@ -603,9 +800,9 @@ def render_workspace_context(config, execution_plan):
         st.badge(
             config["segmentation_label"],
             icon=(
-                ":material/contrast:"
-                if config["mask_method"] == "threshold"
-                else ":material/auto_awesome:"
+                ":material/auto_awesome:"
+                if config["needs_birefnet"]
+                else ":material/contrast:"
             ),
             color="green",
         )
@@ -674,7 +871,15 @@ def render_file_sidebar():
         if folder_picker_error:
             st.warning(folder_picker_error, icon=":material/folder_off:")
 
-        st.caption("Scale, segmentation, and export settings are in Analyze.")
+        st.caption("Choose image outputs in Setup. Download completed results in Export.")
+        st.button(
+            "Go to Export",
+            key="open_export",
+            icon=":material/download:",
+            width="stretch",
+            disabled=not st.session_state.get("last_run"),
+            on_click=_open_export,
+        )
 
     return input_source, uploaded_files, input_dir, output_dir
 
@@ -817,33 +1022,108 @@ def render_analysis_settings(lm):
 
     with segmentation_column.container(border=True):
         st.markdown("**2 · Segmentation**")
-        st.caption("Choose the mask method best suited to the image background.")
-        segmentation_label = st.radio(
-            "Select a segmentation method",
-            ["Classic thresholding (Otsu)", "BiRefNet"],
-            captions=[
-                "Fast and dependable for clean, well-lit backgrounds.",
-                "Better on cluttered backgrounds; needs the optional local checkpoint "
-                "and benefits from a GPU.",
-            ],
-            key=SEGMENTATION_METHOD_KEY,
-            persist_state="session",
-            width="stretch",
+        st.caption(
+            "Choose the mask method best suited to the image background. Check both "
+            "to measure every image with each method and compare them."
         )
-        if segmentation_label == "Classic thresholding (Otsu)":
-            st.selectbox(
+        use_threshold = st.checkbox(
+            SEGMENTATION_METHOD_LABELS["threshold"],
+            key=SEGMENT_THRESHOLD_KEY,
+            persist_state="session",
+        )
+        st.caption("Fast and dependable for clean, well-lit backgrounds.")
+        # The threshold level only affects Otsu, so it is hidden without it.
+        if use_threshold:
+            threshold_level = st.selectbox(
                 "Threshold level",
-                list(lm.THRESHOLD_LEVELS.keys()),
+                list(THRESHOLD_LEVEL_OPTIONS),
                 key=THRESHOLD_LEVEL_KEY,
-                help="auto = Otsu (adapts per image). low/medium/high = fixed 100/125/150.",
+                help=(
+                    "auto = Otsu (adapts per image). custom = choose the cutoff yourself. "
+                    "low/medium/high = fixed 100/125/150."
+                ),
                 persist_state="page",
             )
-        else:
-            st.caption("BiRefNet uses its calibrated confidence threshold automatically.")
+            if threshold_level == CUSTOM_THRESHOLD_LEVEL:
+                st.slider(
+                    "Custom threshold",
+                    min_value=THRESHOLD_MIN,
+                    max_value=THRESHOLD_MAX,
+                    step=1,
+                    key=THRESHOLD_CUSTOM_VALUE_KEY,
+                    help=(
+                        "Grayscale cutoff (0 = black, 255 = white): pixels at or below it "
+                        "count as leaf. Raise it to include paler leaf tissue; lower it to "
+                        "exclude shadows or a dark background."
+                    ),
+                    persist_state="page",
+                )
+                st.html(_threshold_marks_html())
+        use_birefnet = st.checkbox(
+            SEGMENTATION_METHOD_LABELS["birefnet"],
+            key=SEGMENT_BIREFNET_KEY,
+            persist_state="session",
+        )
+        st.caption(
+            "Better on cluttered backgrounds; needs the optional local checkpoint "
+            "and benefits from a GPU."
+        )
+        if not use_threshold and not use_birefnet:
+            st.warning("Choose at least one segmentation method.", icon=":material/warning:")
 
     with st.container(border=True):
         st.markdown("**3 · Measurement Output**")
-        st.caption("Choose result units, the export schema, and whether to keep a per-image failure report.")
+        st.caption("Choose the measurement mask, result units, and CSV schema.")
+        measure_pre_cleanup = st.checkbox(
+            "Measure from pre-cleanup masks",
+            key=MEASURE_PRE_CLEANUP_KEY,
+            help=(
+                "Measure the raw binary segmentation before gap closing and hole "
+                "filling. The edge margin is cleared, the largest object is the "
+                "leaf, and pieces touching the margin or beyond the stray-piece "
+                "distance are dropped. Specks near the leaf still count toward "
+                "area, width, and length."
+            ),
+            persist_state="page",
+        )
+        st.caption(
+            "Pre-cleanup cleanup for this run. Each specimen's explorer can adjust both "
+            "for its clean-size, Remove flashfill, and pre-cleanup previews."
+        )
+        margin_column, gap_column = st.columns(2)
+        with margin_column:
+            st.number_input(
+                "Edge margin (% of box)",
+                min_value=0.0,
+                max_value=CLEAN_MARGIN_MAX,
+                step=0.25,
+                format="%.2f",
+                key=CLEAN_MARGIN_KEY,
+                disabled=not measure_pre_cleanup,
+                help=(
+                    "Clears a band this percent of the target box's shorter side along "
+                    "every edge, where the template's printed box outline lands. Lay "
+                    "leaves inside the box so none of the leaf falls in the band; 0 "
+                    "clears nothing."
+                ),
+                persist_state="page",
+            )
+        with gap_column:
+            st.number_input(
+                "Stray-piece distance (× leaf size)",
+                min_value=0.0,
+                max_value=STRAY_GAP_MAX,
+                step=0.05,
+                format="%.2f",
+                key=STRAY_GAP_KEY,
+                disabled=not measure_pre_cleanup,
+                help=(
+                    "Pieces farther from the leaf than this fraction of its "
+                    "bounding-box diagonal are dropped; 0 keeps only the leaf. Raise "
+                    "it when a leaf's parts lie apart, such as separated leaflets."
+                ),
+                persist_state="page",
+            )
         st.segmented_control(
             "Result units",
             options=list(RESULT_UNITS),
@@ -856,42 +1136,56 @@ def render_analysis_settings(lm):
             ),
             persist_state="page",
         )
-        schema_column, failures_column = st.columns((1.35, 0.65), vertical_alignment="bottom")
-        with schema_column:
-            st.selectbox(
-                "Results CSV schema",
-                [
-                    "Full research schema (area/width/length + px-per-cm)",
-                    "Compact (sample_id, area, width, length)",
-                ],
-                key=RESULTS_SCHEMA_KEY,
-                help=(
-                    "Full adds per-axis pixels-per-unit columns and scale_aspect_ratio "
-                    "for QC. Compact is the trimmed UI export."
-                ),
-                persist_state="page",
-            )
-        with failures_column:
-            st.toggle(
-                "Write Failure Log",
-                key=WRITE_FAILURES_KEY,
-                help="Per-image failure/warning report used by the failure-taxonomy analysis.",
-                persist_state="page",
-            )
-        st.caption(
-            "Results, visual summaries, image previews, and downloads appear in the "
-            "Results tab after a run."
+        st.selectbox(
+            "Results CSV schema",
+            [
+                "Full research schema (area/width/length + px-per-cm)",
+                "Compact (sample_id, area, width, length)",
+            ],
+            key=RESULTS_SCHEMA_KEY,
+            help="Full includes independent axis scales and their ratio for QC.",
+            persist_state="page",
         )
+        st.checkbox("Failure log · leaf_morpho_failures.csv", key=WRITE_FAILURES_KEY,
+                    persist_state="page")
+        st.caption(
+            "The results CSV is always written. Results appear in Analyze after a run."
+        )
+
+    with st.container(border=True):
+        st.markdown("**4 · Image output options**")
+        st.caption("Choose image files to write during this run. QC images use the selected measurement mask.")
+        st.checkbox("Target boxes · {id}_target_box.jpg", key=EXPORT_TARGET_BOXES_KEY,
+                    persist_state="page")
+        st.checkbox("Cleaned leaf masks · {id}_mask.png", key=EXPORT_MASKS_KEY,
+                    persist_state="page")
+        st.checkbox("Pre-cleanup masks · {id}_mask_precleanup_{method}.png",
+                    key=EXPORT_PRE_CLEANUP_KEY, persist_state="page",
+                    help="One per selected segmentation method. Pre-cleanup masks keep "
+                         "holes, specks, and small objects.")
+        st.checkbox("Overlays · {id}_overlay.jpg", key=EXPORT_OVERLAY_KEY, persist_state="page")
+        st.checkbox("Cutouts · {id}_cutout.jpg", key=EXPORT_CUTOUT_KEY, persist_state="page")
+        st.checkbox("Measurement axes · {id}_measurement_axes.jpg", key=EXPORT_AXES_KEY,
+                    persist_state="page")
+        if st.session_state[SEGMENT_THRESHOLD_KEY] and st.session_state[SEGMENT_BIREFNET_KEY]:
+            st.caption(
+                "With both methods selected, each method writes its own masks, overlays, "
+                "cutouts, axes, results CSV, and failure log, with names ending in "
+                "_threshold or _birefnet (for example {id}_mask_birefnet.png)."
+            )
 
 
 def current_analysis_config(lm):
     """Resolve the persisted controls into the values needed for one batch."""
-    segmentation_label = st.session_state[SEGMENTATION_METHOD_KEY]
-    mask_method = (
-        "threshold"
-        if segmentation_label == "Classic thresholding (Otsu)"
-        else "birefnet"
+    mask_methods = tuple(
+        method for method, key in SEGMENTATION_METHOD_KEYS.items() if st.session_state[key]
     )
+    if len(mask_methods) == 1:
+        segmentation_label = SEGMENTATION_METHOD_LABELS[mask_methods[0]]
+    elif mask_methods:
+        segmentation_label = "Classic thresholding + BiRefNet"
+    else:
+        segmentation_label = "No segmentation method"
     threshold_level = st.session_state[THRESHOLD_LEVEL_KEY]
     use_qr = st.session_state[QR_MODE_KEY]
     use_legacy_dimensions = st.session_state[USE_LEGACY_DIMENSIONS_KEY]
@@ -917,15 +1211,29 @@ def current_analysis_config(lm):
 
     return {
         "segmentation_label": segmentation_label,
-        "mask_method": mask_method,
-        "threshold_value": (
-            lm.THRESHOLD_LEVELS[threshold_level]
-            if mask_method == "threshold"
-            else lm.BIREFNET_THRESHOLD
+        "mask_methods": mask_methods,
+        "needs_birefnet": "birefnet" in mask_methods,
+        "threshold_value": threshold_value_for(
+            threshold_level, st.session_state[THRESHOLD_CUSTOM_VALUE_KEY]
         ),
         "compact_csv": st.session_state[RESULTS_SCHEMA_KEY].startswith("Compact"),
         "results_unit": st.session_state[RESULTS_UNIT_KEY],
+        "measurement_source": (
+            "pre-cleanup" if st.session_state[MEASURE_PRE_CLEANUP_KEY] else "cleaned"
+        ),
+        "stray_gap": float(st.session_state[STRAY_GAP_KEY]),
+        "clean_margin": float(st.session_state[CLEAN_MARGIN_KEY]),
         "write_failures": st.session_state[WRITE_FAILURES_KEY],
+        "export_options": {
+            "target_boxes": st.session_state[EXPORT_TARGET_BOXES_KEY],
+            "cleaned_masks": st.session_state[EXPORT_MASKS_KEY],
+            "pre_cleanup_methods": (
+                mask_methods if st.session_state[EXPORT_PRE_CLEANUP_KEY] else ()
+            ),
+            "overlay": st.session_state[EXPORT_OVERLAY_KEY],
+            "cutout": st.session_state[EXPORT_CUTOUT_KEY],
+            "axes": st.session_state[EXPORT_AXES_KEY],
+        },
         "use_qr": use_qr,
         "use_legacy_dimensions": use_legacy_dimensions,
         "sheet_dimensions": sheet_dimensions,
@@ -971,7 +1279,20 @@ def build_preflight_checks(
         None,
     ))
 
-    if config["mask_method"] == "birefnet":
+    checks.append((
+        "Segmentation method",
+        "success" if config["mask_methods"] else "error",
+        not config["mask_methods"],
+        (
+            config["segmentation_label"]
+            if config["mask_methods"]
+            else "No segmentation method is selected. Check Otsu, BiRefNet, or both in Setup."
+        ),
+        None,
+    ))
+
+    needs_birefnet = config["needs_birefnet"]
+    if needs_birefnet:
         birefnet_runtime = birefnet_runtime_status()
         runtime_level = "success" if birefnet_runtime.ready else "error"
         checks.append((
@@ -987,7 +1308,7 @@ def build_preflight_checks(
     checks.append((
         "BiRefNet checkpoint",
         birefnet_level,
-        config["mask_method"] == "birefnet" and birefnet_status.state != "ready",
+        needs_birefnet and birefnet_status.state != "ready",
         (
             birefnet_status.detail
             if birefnet_status.state != "ready"
@@ -1054,7 +1375,7 @@ def build_preflight_checks(
             None,
         ))
 
-    if config["mask_method"] == "birefnet" and execution_plan.execution_device == "cpu":
+    if needs_birefnet and execution_plan.execution_device == "cpu":
         birefnet_cpu_detail = (
             "GPU is available but disabled by an advanced CPU-only override."
             if compute_settings.accelerator_available
@@ -1072,7 +1393,7 @@ def build_preflight_checks(
     checks.append((
         "BiRefNet compute",
         device_report.severity,
-        config["mask_method"] == "birefnet" and device_report.severity == "error",
+        needs_birefnet and device_report.severity == "error",
         device_report.detail,
         None,
     ))
@@ -1187,7 +1508,7 @@ def render_preflight_summary(checks):
     blockers = [check for check in checks if check[2]]
     attention = [check for check in checks if check[1] != "success" or check[2]]
     with st.container(border=True):
-        st.markdown("**4 · Preflight**")
+        st.markdown("**5 · Preflight**")
         if blockers:
             st.badge(
                 f"{len(blockers)} blocking item(s)",
@@ -1197,11 +1518,10 @@ def render_preflight_summary(checks):
             st.caption(
                 "Needs attention: " + ", ".join(check[0] for check in blockers) + "."
             )
-            st.button(
-                "Open Diagnostics",
-                key="open_diagnostics",
+            st.page_link(
+                "pages/0_Diagnostics.py",
+                label="Open Diagnostics",
                 icon=":material/troubleshoot:",
-                on_click=_open_diagnostics,
                 width="content",
             )
         elif attention:
@@ -1234,7 +1554,7 @@ def render_compute_status(compute_settings, execution_plan, config):
             color="green" if execution_plan.uses_gpu else "orange",
         )
         st.caption(execution_plan.detail)
-        if config["mask_method"] == "birefnet" and not execution_plan.uses_gpu:
+        if config["needs_birefnet"] and not execution_plan.uses_gpu:
             gpu_notice = (
                 "GPU available but disabled. BiRefNet is running on CPU because an "
                 "advanced CPU-only override is active."
@@ -1379,12 +1699,11 @@ def execute_leaf_analysis(
 ):
     """Run the batch and return its summary plus output artifacts for this session."""
     output_path.mkdir(parents=True, exist_ok=True)
-    run_sample_ids = []
-    succeeded_so_far = 0
+    preview_cache = tempfile.TemporaryDirectory(prefix="mats_preview_")
     if worker_risk.requires_break_glass:
         st.session_state.pop("break_glass_available_workers", None)
     if (
-        config["mask_method"] == "birefnet"
+        config["needs_birefnet"]
         and execution_plan.execution_device == "cpu"
         and execution_plan.workers > 1
     ):
@@ -1399,17 +1718,6 @@ def execute_leaf_analysis(
         counts_box = st.empty()
 
         def update_progress(status):
-            nonlocal succeeded_so_far
-            if status["succeeded"] > succeeded_so_far:
-                current_image = status["current_image"]
-                sample_id = (
-                    lm.target_box_sample_id(current_image)
-                    if lm.is_target_box_image(current_image)
-                    else Path(current_image).stem
-                )
-                run_sample_ids.append(sample_id)
-            succeeded_so_far = status["succeeded"]
-
             total = max(status["total"], 1)
             progress_bar.progress(status["processed"] / total)
             counts_box.write(
@@ -1426,7 +1734,7 @@ def execute_leaf_analysis(
                     str(results_path),
                     template_dimensions=config["template_dimensions"],
                     output_mode="masks",
-                    mask_method=config["mask_method"],
+                    mask_method=config["mask_methods"],
                     threshold_value=config["threshold_value"],
                     workers=int(execution_plan.workers),
                     execution_device=execution_plan.execution_device,
@@ -1437,13 +1745,31 @@ def execute_leaf_analysis(
                     write_failures=config["write_failures"],
                     compact_csv=config["compact_csv"],
                     results_unit=config["results_unit"],
-                    save_measurement_axes=False,
+                    save_measurement_axes=config["export_options"]["axes"],
+                    export_options={**config["export_options"], "preview_dir": preview_cache.name},
+                    measurement_source=config["measurement_source"],
+                    stray_gap=config["stray_gap"],
+                    clean_margin=config["clean_margin"],
                 )
         except ValueError as exc:
+            preview_cache.cleanup()
             st.error(f"Run prevented by worker safety checks: {exc}")
-            return None, []
+            return None, {}
 
-    return summary, collect_output_pairs(output_path, run_sample_ids)
+    input_images = image_paths if input_source == "Local folder" else ()
+    run_pairs = {
+        method: pairs_from_manifest(
+            summary["artifacts"], input_images, method,
+            measurement_source=summary["measurement_source"],
+            preview_artifacts=summary["preview_artifacts"],
+        )
+        for method in summary["methods"]
+    }
+    previous_cache = st.session_state.get("preview_cache")
+    st.session_state["preview_cache"] = preview_cache
+    if previous_cache is not None:
+        previous_cache.cleanup()
+    return summary, run_pairs
 
 
 def main():
@@ -1454,7 +1780,7 @@ def main():
     )
     branding.apply_logo()
     st.html(_WORKBENCH_STYLES)
-    st.session_state.setdefault("viewer_pairs", [])
+    st.session_state.setdefault("viewer_pairs", {})
     st.session_state.setdefault(UNIT_KEY, "in")
     st.session_state.setdefault(PREVIOUS_UNIT_KEY, "in")
     st.session_state.setdefault(WIDTH_KEY, 12.0)
@@ -1463,14 +1789,28 @@ def main():
     st.session_state.setdefault(QR_MODE_KEY, False)
     st.session_state.setdefault(USE_LEGACY_DIMENSIONS_KEY, False)
     st.session_state.setdefault(LEGACY_DIMENSIONS_TEXT_KEY, "10x9.5in")
-    st.session_state.setdefault(SEGMENTATION_METHOD_KEY, "Classic thresholding (Otsu)")
+    st.session_state.setdefault(SEGMENT_THRESHOLD_KEY, True)
+    st.session_state.setdefault(SEGMENT_BIREFNET_KEY, False)
     st.session_state.setdefault(THRESHOLD_LEVEL_KEY, "auto")
+    st.session_state.setdefault(THRESHOLD_CUSTOM_VALUE_KEY, THRESHOLD_LEVELS["medium"])
+    # Streamlit discards a widget's value once it stops rendering. Re-saving
+    # keeps the threshold choice while Otsu is unchecked or the level isn't custom.
+    for key in (THRESHOLD_LEVEL_KEY, THRESHOLD_CUSTOM_VALUE_KEY):
+        st.session_state[key] = st.session_state[key]
     st.session_state.setdefault(
         RESULTS_SCHEMA_KEY,
         "Full research schema (area/width/length + px-per-cm)",
     )
     st.session_state.setdefault(RESULTS_UNIT_KEY, DEFAULT_RESULTS_UNIT)
+    st.session_state.setdefault(MEASURE_PRE_CLEANUP_KEY, False)
+    st.session_state.setdefault(STRAY_GAP_KEY, STRAY_GAP_DEFAULT)
+    st.session_state.setdefault(CLEAN_MARGIN_KEY, CLEAN_MARGIN_DEFAULT)
     st.session_state.setdefault(WRITE_FAILURES_KEY, True)
+    for key, default in ((EXPORT_TARGET_BOXES_KEY, True), (EXPORT_MASKS_KEY, True),
+                         (EXPORT_PRE_CLEANUP_KEY, False),
+                         (EXPORT_OVERLAY_KEY, False), (EXPORT_CUTOUT_KEY, False),
+                         (EXPORT_AXES_KEY, False)):
+        st.session_state.setdefault(key, default)
     st.session_state.setdefault(INPUT_DIR_KEY, str(DEFAULT_INPUT_DIR))
     st.session_state.setdefault(OUTPUT_DIR_KEY, str(DEFAULT_OUTPUT_DIR))
     st.session_state.setdefault(INPUT_SOURCE_KEY, "Local folder")
@@ -1484,8 +1824,10 @@ def main():
     with st.expander("About This Workspace", icon=":material/info:"):
         st.markdown(
             "Choose input and output locations in the sidebar, then configure scale, "
-            "segmentation, and export options in Analyze. Results contains measurement "
-            "visuals and downloads; Diagnostics contains compute and preflight details. "
+            "segmentation, and output options in Setup. Analyze contains the launch and "
+            "measurement visuals; Adjust contains specimen previews and saving; "
+            "Export contains saved files and downloads. Diagnostics in the sidebar "
+            "contains compute and preflight details. "
             "Template Creator, BiRefNet Setup, CPU Options, Robust QR Setup, and Help "
             "remain available in the app navigation."
         )
@@ -1517,10 +1859,10 @@ def main():
 
     input_source, uploaded_files, input_dir, output_dir = render_file_sidebar()
     apply_pending_workspace_tab()
-    analyze_tab, results_tab, diagnostics_tab = render_workspace_navigation()
+    setup_tab, analyze_tab, adjust_tab, export_tab = render_workspace_navigation()
 
-    if analyze_tab.open:
-        with analyze_tab:
+    if setup_tab.open:
+        with setup_tab:
             render_analysis_settings(lm)
 
     config = current_analysis_config(lm)
@@ -1529,7 +1871,7 @@ def main():
     birefnet_parallel_is_unlocked = birefnet_parallel_unlocked(available_workers)
     execution_plan = resolve_execution_plan(
         compute_settings,
-        config["mask_method"],
+        "birefnet" if config["needs_birefnet"] else "threshold",
         birefnet_parallel_allowed=birefnet_parallel_is_unlocked,
     )
     worker_risk = lm.worker_risk_report(execution_plan.workers, available_workers)
@@ -1547,8 +1889,11 @@ def main():
         worker_risk,
         break_glass_is_unlocked,
     )
+    st.session_state["diagnostics_context"] = config
+    st.session_state["diagnostics_inputs"] = (
+        input_source, uploaded_files, input_dir
+    )
 
-    run_clicked = False
     if analyze_tab.open:
         with analyze_tab:
             render_workspace_context(config, execution_plan)
@@ -1560,49 +1905,53 @@ def main():
                 execution_plan,
                 output_path,
             )
-    elif results_tab.open:
-        with results_tab:
+            if run_clicked:
+                summary, run_pairs = execute_leaf_analysis(
+                    lm, config, image_paths, uploaded_files, input_source,
+                    output_path, results_path, execution_plan, worker_risk,
+                    break_glass_is_unlocked, birefnet_parallel_is_unlocked,
+                )
+                if summary is not None:
+                    st.session_state["last_run"] = {
+                        "run_id": uuid.uuid4().hex,
+                        "succeeded": summary["succeeded"],
+                        "failed": summary["failed"],
+                        "total": summary["total"],
+                        "workers": summary["workers"],
+                        "worker_reason": summary["worker_reason"],
+                        "execution_device": summary["execution_device"],
+                        "output_path": str(output_path),
+                        "mask_methods": summary["methods"],
+                        "by_method": {
+                            method: {
+                                "succeeded": outcome["succeeded"],
+                                "failed": outcome["failed"],
+                                "results_path": outcome["results_path"],
+                                "failure_rows": outcome["failure_rows"][:200],
+                                "failure_overflow": max(0, len(outcome["failure_rows"]) - 200),
+                            }
+                            for method, outcome in summary["by_method"].items()
+                        },
+                        "pre_cleanup_methods": config["export_options"]["pre_cleanup_methods"],
+                        "results_unit": config["results_unit"],
+                        "measurement_source": summary["measurement_source"],
+                        "stray_gap": summary["stray_gap"],
+                        "clean_margin": summary["clean_margin"],
+                        "threshold_value": config["threshold_value"],
+                        "scale_axes_by_sample": _scale_axes_by_sample(summary),
+                        "artifacts": summary["artifacts"],
+                        "export_options": dict(config["export_options"]),
+                    }
+                    st.session_state["viewer_pairs"] = run_pairs
+                    _clear_export_zip_cache()
+                    st.rerun()
             render_results(lm)
-    elif diagnostics_tab.open:
-        with diagnostics_tab:
-            render_diagnostics(compute_settings, execution_plan, config, checks)
-
-    if run_clicked:
-        summary, run_pairs = execute_leaf_analysis(
-            lm,
-            config,
-            image_paths,
-            uploaded_files,
-            input_source,
-            output_path,
-            results_path,
-            execution_plan,
-            worker_risk,
-            break_glass_is_unlocked,
-            birefnet_parallel_is_unlocked,
-        )
-        if summary is not None:
-            st.session_state["last_run"] = {
-                "succeeded": summary["succeeded"],
-                "failed": summary["failed"],
-                "total": summary["total"],
-                "workers": summary["workers"],
-                "worker_reason": summary["worker_reason"],
-                "execution_device": summary["execution_device"],
-                "failure_rows": summary["failure_rows"][:200],
-                "failure_overflow": max(0, len(summary["failure_rows"]) - 200),
-                "results_path": str(results_path),
-                "output_path": str(output_path),
-                "mask_method": config["mask_method"],
-                "results_unit": config["results_unit"],
-            }
-            st.session_state["viewer_pairs"] = merge_viewer_pairs(
-                st.session_state["viewer_pairs"],
-                run_pairs,
-            )
-            st.session_state.pop("export_zip_path", None)
-            st.session_state[PENDING_WORKSPACE_TAB_KEY] = "Results"
-            st.rerun()
+    elif export_tab.open:
+        with export_tab:
+            render_export_section()
+    elif adjust_tab.open:
+        with adjust_tab:
+            render_adjust_workspace()
 
 
 def render_results(lm):
@@ -1624,19 +1973,52 @@ def render_results(lm):
             )
         return
 
-    results_path = Path(run["results_path"])
-    output_path = Path(run["output_path"])
-    results_unit = run.get("results_unit", DEFAULT_RESULTS_UNIT)
-    if results_unit not in RESULT_UNITS:
-        results_unit = DEFAULT_RESULTS_UNIT
-    unit_symbol = RESULTS_UNIT_SYMBOLS[results_unit]
-    area_symbol = f"{unit_symbol}²"
+    unit_symbol, area_symbol = _unit_symbols(run)
+    methods = tuple(run["mask_methods"])
     st.subheader("Results", anchor=False)
-    st.success(
-        f"Completed {run['succeeded']} measurement(s); {run['failed']} failed "
-        f"(of {run['total']} input image(s)).",
-        icon=":material/check_circle:",
+    st.caption(
+        "Measurements from "
+        + ("pre-cleanup masks" if run.get("measurement_source") == "pre-cleanup"
+           else "cleaned masks")
+        + "."
     )
+    if len(methods) > 1:
+        per_method = "; ".join(
+            f"{SEGMENTATION_METHOD_LABELS[method]}: {run['by_method'][method]['succeeded']} "
+            f"measured, {run['by_method'][method]['failed']} failed"
+            for method in methods
+        )
+        st.success(
+            f"Completed {run['total']} input image(s) with each method. {per_method}.",
+            icon=":material/check_circle:",
+        )
+        if st.session_state.get(RESULTS_METHOD_KEY) not in methods:
+            st.session_state[RESULTS_METHOD_KEY] = methods[0]
+        with st.container(border=True):
+            st.markdown("**Compare measurement methods**")
+            method = st.segmented_control(
+                "Measurement table and specimen view",
+                options=list(methods),
+                format_func=SEGMENTATION_METHOD_LABELS.get,
+                required=True,
+                key=RESULTS_METHOD_KEY,
+                help="Each method has its own measurements, masks, and failure log.",
+            )
+            st.caption(
+                "The summary, charts, measurement table, and selected specimen below "
+                "follow this choice."
+            )
+    else:
+        method = methods[0]
+    outcome = run["by_method"][method]
+    results_path = Path(outcome["results_path"])
+    output_pairs = st.session_state.get("viewer_pairs", {}).get(method, [])
+    if len(methods) == 1:
+        st.success(
+            f"Completed {outcome['succeeded']} measurement(s); {outcome['failed']} failed "
+            f"(of {run['total']} input image(s)).",
+            icon=":material/check_circle:",
+        )
     device_label = {
         "cpu": "CPU only",
         "hybrid": "GPU RF-DETR + CPU Otsu fan-out",
@@ -1645,21 +2027,19 @@ def render_results(lm):
         f"Workers used: {run['workers']} ({run['worker_reason']}); compute: {device_label}."
     )
 
-    if run["failure_rows"]:
-        with st.expander(f"Processing warnings and failures ({run['failed']})"):
-            for row in run["failure_rows"]:
+    if outcome["failure_rows"]:
+        with st.expander(f"Processing warnings and failures ({outcome['failed']})"):
+            for row in outcome["failure_rows"]:
                 st.write(f"{row['sample_id']}: {row['status']}")
-            if run["failure_overflow"]:
-                st.write(f"...and {run['failure_overflow']} more (see the failures CSV).")
+            if outcome["failure_overflow"]:
+                st.write(f"...and {outcome['failure_overflow']} more (see the failures CSV).")
 
     if not results_path.is_file():
         st.warning(
-            f"The results CSV is not available at {display_path(results_path)}. The output preview "
-            "and exports may still be available below.",
+            f"The results CSV is not available at {display_path(results_path)}. "
+            "Other saved files may still be available in Export.",
             icon=":material/folder_off:",
         )
-        render_output_preview(st.session_state.get("viewer_pairs", []))
-        render_export_section(results_path, output_path, unit_symbol)
         return
 
     total_rows = count_csv_rows(results_path)
@@ -1673,7 +2053,7 @@ def render_results(lm):
         st.error(f"Could not read the results CSV: {exc}")
         return
 
-    measurements = normalize_measurements(frame, results_unit)
+    measurements = normalize_measurements(frame, run.get("results_unit", DEFAULT_RESULTS_UNIT))
     if measurements.empty:
         st.warning(
             "The CSV contains no complete area, width, and length measurements to visualize.",
@@ -1684,8 +2064,8 @@ def render_results(lm):
         with st.container(horizontal=True):
             st.metric(
                 "Successful measurements",
-                f"{run['succeeded']:,}",
-                delta=f"{run['failed']} failed",
+                f"{outcome['succeeded']:,}",
+                delta=f"{outcome['failed']} failed",
                 delta_color="inverse",
                 border=True,
             )
@@ -1787,6 +2167,67 @@ def render_results(lm):
                         "horizontal and vertical axes."
                     )
 
+        table_columns = ["sample_id", "leaf_area", "width", "length"]
+        if "scale_aspect_ratio" in measurements:
+            table_columns.append("scale_aspect_ratio")
+        table_data = measurements.loc[:, table_columns].head(RESULTS_TABLE_MAX_ROWS).copy()
+        selected_key = f"selected_specimen_{run.get('run_id', '')}_{method}"
+        sample_ids = table_data["sample_id"].astype(str).tolist()
+        previous_sample_id = st.session_state.get(selected_key)
+        selection_default = (
+            {"selection": {"rows": [sample_ids.index(previous_sample_id)]}}
+            if previous_sample_id in sample_ids else None
+        )
+        with st.container(border=True):
+            st.markdown("**Measurement Table**")
+            st.caption(
+                f"{SEGMENTATION_METHOD_LABELS[method]} measurements. Select a row to "
+                "inspect its matching target-box image and segmentation mask."
+            )
+            table_event = st.dataframe(
+                table_data,
+                column_config=_measurement_column_config(unit_symbol, area_symbol),
+                hide_index=True,
+                height=440,
+                width="stretch",
+                key=f"measurement_table_{run.get('run_id', '')}_{method}",
+                on_select="rerun",
+                selection_mode="single-row",
+                selection_default=selection_default,
+            )
+            if total_rows > len(table_data):
+                st.caption(
+                    f"Showing the first {len(table_data):,} of {total_rows:,} rows. "
+                    "Download the CSV for the full dataset."
+                )
+
+        selected_row = None
+        if table_event.selection.rows:
+            selected_row = table_data.iloc[table_event.selection.rows[0]]
+        selected_sample_id = (
+            str(selected_row["sample_id"]) if selected_row is not None else None
+        )
+        if selected_sample_id is None:
+            st.session_state.pop(selected_key, None)
+        else:
+            st.session_state[selected_key] = selected_sample_id
+        render_specimen_inspector(
+            selected_sample_id,
+            selected_row,
+            output_pairs,
+            unit_symbol,
+            area_symbol,
+            run=run,
+            method=method,
+        )
+        if selected_sample_id is not None:
+            st.button(
+                "Adjust selected specimen",
+                icon=":material/tune:",
+                on_click=_switch_workspace_tab,
+                args=("Adjust",),
+            )
+
         qr_trace_columns = [column for column in QR_TRACE_FIELDNAMES if column in frame.columns]
         if qr_trace_columns:
             with st.container(border=True):
@@ -1810,70 +2251,162 @@ def render_results(lm):
                     height=260,
                 )
 
-        table_columns = ["sample_id", "leaf_area", "width", "length"]
-        if "scale_aspect_ratio" in measurements:
-            table_columns.append("scale_aspect_ratio")
-        table_data = measurements.loc[:, table_columns].head(RESULTS_TABLE_MAX_ROWS).copy()
-        output_pairs = st.session_state.get("viewer_pairs", [])
-        table_column, inspector_column = st.columns((1.15, 0.85), vertical_alignment="top")
-        with table_column.container(border=True):
-            st.markdown("**Measurement Table**")
-            st.caption("Select a row to inspect the matching target-box image and segmentation mask.")
-            table_event = st.dataframe(
-                table_data,
-                column_config={
-                    "sample_id": st.column_config.TextColumn("Sample", pinned=True),
-                    "leaf_area": st.column_config.NumberColumn(
-                        f"Leaf area ({area_symbol})",
-                        format="%.2f",
-                    ),
-                    "width": st.column_config.NumberColumn(
-                        f"Leaf width ({unit_symbol})", format="%.2f"
-                    ),
-                    "length": st.column_config.NumberColumn(
-                        f"Leaf length ({unit_symbol})", format="%.2f"
-                    ),
-                    "scale_aspect_ratio": st.column_config.NumberColumn(
-                        "Scale axis ratio",
-                        format="%.3f",
-                    ),
-                },
-                hide_index=True,
-                height=440,
-                key="measurement_table",
-                on_select="rerun",
-                selection_mode="single-row",
-            )
-            if total_rows > len(table_data):
-                st.caption(
-                    f"Showing the first {len(table_data):,} of {total_rows:,} rows. "
-                    "Download the CSV for the full dataset."
-                )
 
-        selected_row = None
-        if table_event.selection.rows:
-            selected_row = table_data.iloc[table_event.selection.rows[0]]
-        elif not table_data.empty:
-            selected_row = table_data.iloc[0]
-        selected_sample_id = (
-            str(selected_row["sample_id"]) if selected_row is not None else None
+def render_adjust_workspace():
+    """Inspect one specimen and optionally save its settings to marked peers."""
+    run = st.session_state.get("last_run")
+    st.subheader("Adjust", anchor=False)
+    if not run:
+        st.info("Run an analysis to adjust its specimen masks and measurements.")
+        st.button("Open Analyze", on_click=_switch_workspace_tab, args=("Analyze",))
+        return
+    methods = tuple(run["mask_methods"])
+    if st.session_state.get(RESULTS_METHOD_KEY) not in methods:
+        st.session_state[RESULTS_METHOD_KEY] = methods[0]
+    if len(methods) > 1:
+        method = st.segmented_control(
+            "Segmentation method", list(methods),
+            format_func=SEGMENTATION_METHOD_LABELS.get, required=True,
+            key=RESULTS_METHOD_KEY,
         )
-        with inspector_column:
-            render_specimen_inspector(
-                selected_sample_id,
-                selected_row,
-                output_pairs,
-                unit_symbol,
-                area_symbol,
+    else:
+        method = methods[0]
+        st.caption(SEGMENTATION_METHOD_LABELS[method])
+    results_path = Path(run["by_method"][method]["results_path"])
+    if not results_path.is_file():
+        st.warning("This method's results CSV is unavailable.")
+        return
+    try:
+        frame = read_results_dataframe(
+            str(results_path), results_path.stat().st_mtime_ns, None
+        )
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError) as exc:
+        st.error(f"Could not read results: {exc}")
+        return
+    measurements = normalize_measurements(frame, run.get("results_unit", DEFAULT_RESULTS_UNIT))
+    pairs = st.session_state.get("viewer_pairs", {}).get(method, [])
+    pairs_by_id = {str(pair["sample_id"]): pair for pair in pairs}
+    choices = [
+        str(sample_id) for sample_id in measurements["sample_id"]
+        if str(sample_id) in pairs_by_id
+        and (method != "threshold" or pairs_by_id[str(sample_id)].get("target_box"))
+    ]
+    if not choices:
+        st.info("No measured specimens with previews are available in this session.")
+        return
+    unit_symbol, area_symbol = _unit_symbols(run)
+    sample_id, marked = render_adjust_browser(
+        choices, run.get("run_id", ""), method, measurements=measurements,
+        unit_symbol=unit_symbol, area_symbol=area_symbol,
+    )
+    if method != "threshold":
+        st.caption("BiRefNet cleanup controls currently preview changes only.")
+    render_adjust_controls(
+        pairs_by_id[sample_id], run, method,
+        marked_pairs=[pairs_by_id[item] for item in marked],
+    )
+
+
+def _record_table_view(table_key, selected_key):
+    sample_id = _component_value(table_key, "view")
+    if sample_id is not None:
+        st.session_state[selected_key] = str(sample_id)
+
+
+def _record_table_mark(table_key, marks_key):
+    """Apply one Marked for Adjustment tick; setting, not toggling, keeps repeats harmless."""
+    change = _component_value(table_key, "mark")
+    if not change:
+        return
+    marked = set(st.session_state.get(marks_key, []))
+    if change["marked"]:
+        marked.add(str(change["id"]))
+    else:
+        marked.discard(str(change["id"]))
+    st.session_state[marks_key] = sorted(marked)
+
+
+def _set_marked_specimens(key, sample_ids):
+    st.session_state[key] = list(sample_ids)
+
+
+def render_adjust_browser(
+    choices, run_id, method, *, measurements=None, unit_symbol="cm", area_symbol="cm²",
+):
+    """Search specimens in a measurement table; marks persist across searches."""
+    scope = f"{run_id}_{method}"
+    selected_key = f"selected_specimen_{scope}"
+    marks_key = f"adjust_marked_{scope}"
+    search_key = f"adjust_search_{scope}"
+    if st.session_state.get(selected_key) not in choices:
+        st.session_state[selected_key] = choices[0]
+    valid = set(choices)
+    marked = set(st.session_state.get(marks_key, [])) & valid
+    st.session_state[marks_key] = sorted(marked)
+    query = st.text_input("Search specimen names", key=search_key).strip().casefold()
+    filtered = [sample_id for sample_id in choices if query in sample_id.casefold()]
+    if method == "threshold":
+        with st.container(horizontal=True):
+            st.button(
+                "Mark all matching" if query else "Mark all",
+                key=f"adjust_mark_all_{scope}", disabled=not filtered,
+                on_click=_set_marked_specimens,
+                args=(marks_key, sorted(marked | set(filtered))),
             )
-    render_export_section(results_path, output_path, unit_symbol)
+            st.button(
+                "Clear marks", key=f"adjust_clear_marks_{scope}", disabled=not marked,
+                on_click=_set_marked_specimens, args=(marks_key, []),
+            )
+        st.caption(f"{len(marked):,} marked across all searches.")
+    if not filtered:
+        st.info("No specimen names match this search. Clear the search to see all specimens.")
+        return st.session_state[selected_key], sorted(marked)
+    from mats.app.specimen_table import show_specimen_table
 
-    with st.expander("Browse Output Previews", icon=":material/photo_library:"):
-        render_output_preview(st.session_state.get("viewer_pairs", []))
+    if measurements is None:
+        table = pd.DataFrame({"sample_id": filtered})
+    else:
+        table = measurements.assign(sample_id=measurements["sample_id"].astype(str))
+        table = table.loc[table["sample_id"].isin(set(filtered))]
+    columns = [
+        {"key": column, "label": label, "decimals": decimals}
+        for column, label, decimals in _measurement_columns(unit_symbol, area_symbol)
+        if column in table
+    ]
+    table = table.loc[:, [column["key"] for column in columns]]
+    rows = table.astype(object).where(table.notna(), None).to_dict("records")
+    markable = method == "threshold"
+    st.caption(
+        f"{len(filtered):,} matching specimens. Click a row to view it"
+        + ("; tick Marked for Adjustment to include it in the marked overwrite." if markable else ".")
+    )
+    table_key = f"adjust_table_{scope}"
+    show_specimen_table(
+        key=table_key, columns=columns, rows=rows,
+        view=st.session_state[selected_key], marked=sorted(marked), markable=markable,
+        on_view_change=lambda: _record_table_view(table_key, selected_key),
+        on_mark_change=lambda: _record_table_mark(table_key, marks_key),
+    )
+    return st.session_state[selected_key], sorted(marked)
 
 
-def render_specimen_inspector(sample_id, measurement, pairs, unit_symbol="cm", area_symbol="cm²"):
-    """Render the selected specimen's measurements beside its generated artifacts."""
+def render_adjust_controls(pair, run, method, *, marked_pairs=None):
+    """Render only adjustment controls and the live mask/color preview."""
+    st.caption(f"Sample: {pair['sample_id']}")
+    with st.container(border=True):
+        if method == "threshold" and pair.get("target_box"):
+            render_threshold_explorer(pair, run, marked_pairs=marked_pairs)
+        elif method == "birefnet" and _raw_mask_path(pair):
+            render_mask_explorer(pair, run, method)
+        else:
+            st.info("The original segmentation mask is unavailable for adjustment.")
+
+
+def render_specimen_inspector(
+    sample_id, measurement, pairs, unit_symbol="cm", area_symbol="cm²",
+    run=None, method=None,
+):
+    """Render the selected specimen's measurements and artifacts below the table."""
     with st.container(border=True):
         st.markdown("**Selected Specimen**")
         if sample_id is None:
@@ -1900,7 +2433,402 @@ def render_specimen_inspector(sample_id, measurement, pairs, unit_symbol="cm", a
         render_output_pair(pair, width="stretch")
 
 
-def render_output_pair(pair, width=PREVIEW_IMAGE_WIDTH):
+
+def _component_value(component_key, name):
+    component_state = st.session_state.get(component_key)
+    value = getattr(component_state, name, None)
+    if value is None and isinstance(component_state, dict):
+        value = component_state.get(name)
+    return value
+
+
+def _record_threshold_preview(component_key, state_key):
+    cutoff = _component_value(component_key, "cutoff")
+    if cutoff is not None and 0 <= int(cutoff) <= THRESHOLD_MAX:
+        st.session_state.setdefault("threshold_preview_cutoffs", {})[state_key] = int(cutoff)
+
+
+def _record_clean_radius(component_key, state_key):
+    from mats.mask_cleanup import CLEAN_RADIUS_MAX
+
+    radius = _component_value(component_key, "clean_radius")
+    if radius is not None and 0 <= int(radius) <= CLEAN_RADIUS_MAX:
+        st.session_state.setdefault("clean_preview_radii", {})[state_key] = int(radius)
+
+
+CLEAN_SIZE_HELP = (
+    "0 shows the run's usual mask. Above 0, Clean image replaces MATS cleanup in "
+    "this preview: the edge margin is cleared, pieces touching it or far from the "
+    "leaf are removed, and white specks and enclosed black holes with an inscribed "
+    "radius below the clean size (px) are removed or filled. The leaf is always "
+    "kept and nothing is flash-filled. Preview only; set it back to 0 to overwrite."
+)
+CLEAN_SIZE_ON_CAPTION = (
+    "Clean size is above 0, so this preview shows Clean image instead of MATS cleanup."
+)
+
+
+def _clean_radius(state_key):
+    """The clean size remembered for this specimen; 0 means Clean image is off."""
+    from mats.mask_cleanup import CLEAN_RADIUS_DEFAULT
+
+    return st.session_state.setdefault("clean_preview_radii", {}).get(
+        state_key, CLEAN_RADIUS_DEFAULT
+    )
+
+
+REMOVE_FILL_RAW_NOTE = "This run measured raw masks, so hole filling is already off."
+
+
+def _record_remove_fill(component_key, state_key):
+    remove_fill = _component_value(component_key, "remove_fill")
+    if remove_fill is not None:
+        st.session_state.setdefault("remove_fill_previews", {})[state_key] = bool(remove_fill)
+
+
+def _remove_fill(run, state_key):
+    """Whether Remove flashfill is on for this specimen; only cleaned runs fill holes."""
+    if run.get("measurement_source", "cleaned") != "cleaned":
+        return False
+    return st.session_state.setdefault("remove_fill_previews", {}).get(state_key, False)
+
+
+def _remove_fill_note(run):
+    """Why Remove flashfill is unavailable for this run, or None when it is available."""
+    return None if run.get("measurement_source", "cleaned") == "cleaned" else REMOVE_FILL_RAW_NOTE
+
+
+def _run_stray_gap(run):
+    """The stray-piece gap this run measured with; the default for older runs."""
+    return run.get("stray_gap", STRAY_GAP_DEFAULT)
+
+
+def _run_clean_margin(run):
+    """The edge margin this run measured with; the default for older runs."""
+    return run.get("clean_margin", CLEAN_MARGIN_DEFAULT)
+
+
+def _specimen_cleanup_keys(run, method, sample_id):
+    base = f"{run.get('run_id', '')}:{method}:{sample_id}"
+    return f"specimen_clean_margin_{base}", f"specimen_stray_gap_{base}"
+
+
+def _specimen_cleanup(run, method, sample_id):
+    """This specimen's edge margin and stray gap: explorer edits, else saved, else the run's."""
+    saved = run.get("threshold_adjustments", {}).get(sample_id, {}) if method == "threshold" else {}
+    margin_key, gap_key = _specimen_cleanup_keys(run, method, sample_id)
+    margin = st.session_state.get(margin_key, saved.get("clean_margin", _run_clean_margin(run)))
+    gap = st.session_state.get(gap_key, saved.get("stray_gap", _run_stray_gap(run)))
+    return float(margin), float(gap)
+
+
+def _specimen_cleanup_inputs(run, method, sample_id, *, margin_active, gap_active):
+    """Render this specimen's edge-margin and stray-gap inputs; return their values.
+
+    Each input is enabled only while the view it drives has flash fill off.
+    """
+    margin_key, gap_key = _specimen_cleanup_keys(run, method, sample_id)
+    margin, gap = _specimen_cleanup(run, method, sample_id)
+    st.session_state[margin_key], st.session_state[gap_key] = margin, gap
+    margin_column, gap_column = st.columns(2)
+    with margin_column:
+        st.number_input(
+            "Edge margin (% of box)",
+            min_value=0.0,
+            max_value=CLEAN_MARGIN_MAX,
+            step=0.25,
+            format="%.2f",
+            key=margin_key,
+            disabled=not margin_active,
+            help=(
+                "Band cleared along every edge of this specimen's target box, where "
+                "the printed box outline lands. Applies to pre-cleanup runs, a clean "
+                "size above 0, and Remove flashfill."
+            ),
+        )
+    with gap_column:
+        st.number_input(
+            "Stray-piece distance (× leaf size)",
+            min_value=0.0,
+            max_value=STRAY_GAP_MAX,
+            step=0.05,
+            format="%.2f",
+            key=gap_key,
+            disabled=not gap_active,
+            help=(
+                "Pieces farther from the leaf than this fraction of its bounding-box "
+                "diagonal are dropped; 0 keeps only the leaf. Applies to pre-cleanup "
+                "runs and a clean size above 0."
+            ),
+        )
+    return float(st.session_state[margin_key]), float(st.session_state[gap_key])
+
+
+def _raw_mask_path(pair):
+    """The specimen's mask before MATS cleanup, when this session has it."""
+    return pair.get("raw_mask")
+
+
+def _reset_threshold_preview(state_key):
+    st.session_state.setdefault("threshold_preview_cutoffs", {}).pop(state_key, None)
+
+
+def _use_preview_threshold(cutoff):
+    st.session_state[THRESHOLD_LEVEL_KEY] = CUSTOM_THRESHOLD_LEVEL
+    st.session_state[THRESHOLD_CUSTOM_VALUE_KEY] = cutoff
+
+
+@st.fragment
+def render_threshold_explorer(pair, run, *, marked_pairs=None):
+    """Preview an Otsu cutoff and save it to this specimen or marked specimens."""
+    from mats.app.threshold_preview import (
+        clean_levels_for_threshold, cleaned_sample, color_sample, grayscale_sample,
+        pre_cleanup_sample, show_threshold_preview,
+    )
+
+    target_path = pair["target_box"]
+    try:
+        grayscale_image, otsu_cutoff = grayscale_sample(str(target_path))
+    except ValueError as exc:
+        st.info(str(exc))
+        return
+    try:
+        color_image = color_sample(str(target_path))
+    except ValueError:
+        color_image = None  # The mask panel still works without the color panel.
+
+    saved_adjustment = run.get("threshold_adjustments", {}).get(pair["sample_id"], {})
+    saved_cutoff = saved_adjustment.get("cutoff", run.get("threshold_value"))
+    if saved_cutoff is None:
+        saved_cutoff = otsu_cutoff
+    state_key = f"{run.get('run_id', '')}:{pair['sample_id']}"
+    component_key = f"threshold_preview_{state_key}"
+    cutoff = st.session_state.setdefault("threshold_preview_cutoffs", {}).get(
+        state_key, saved_cutoff
+    )
+    clean_key = f"{run.get('run_id', '')}:threshold:{pair['sample_id']}"
+    remove_fill = _remove_fill(run, clean_key)
+
+    st.markdown("**Explore and adjust output**")
+    clean_radius = _clean_radius(clean_key)
+    clean_on = clean_radius > 0
+    if clean_on:
+        st.caption(
+            CLEAN_SIZE_ON_CAPTION + " Set it back to 0 to overwrite."
+            + (" Remove flashfill doesn't apply while it is above 0." if remove_fill else "")
+        )
+    elif run.get("measurement_source") == "cleaned":
+        st.caption(
+            "Drag to preview a new cutoff; the masked leaf beside the mask shows which "
+            "parts of the leaf it keeps. Release to apply MATS cleanup to this "
+            "sample. Saved outputs change only when you press Overwrite below."
+        )
+    else:
+        st.caption(
+            "Drag to preview a new raw mask for this sample; the masked leaf beside it "
+            "shows which parts of the leaf it keeps. Release to see the mask this run "
+            "measures, with the edge margin cleared and stray pieces dropped. Nothing "
+            "saved changes until you press Overwrite below."
+        )
+    pre_cleanup = run.get("measurement_source") == "pre-cleanup"
+    # Views without flash fill clear the edge margin, including while dragging.
+    flash_fill_off = clean_on or pre_cleanup or remove_fill
+    margin, gap = _specimen_cleanup_inputs(
+        run, "threshold", pair["sample_id"],
+        margin_active=flash_fill_off, gap_active=clean_on or pre_cleanup,
+    )
+    # Both images go to the browser, so the clean-size slider is live from 0.
+    try:
+        clean_levels_image = clean_levels_for_threshold(str(target_path), cutoff, gap, margin)
+        if pre_cleanup:
+            cleaned_image = pre_cleanup_sample(str(target_path), cutoff, margin, gap)
+        else:
+            cleaned_image = cleaned_sample(
+                str(target_path), cutoff, fill_holes=not remove_fill, clean_margin=margin,
+            )
+    except ValueError as exc:
+        st.info(str(exc))
+        return
+    show_threshold_preview(
+        key=component_key,
+        grayscale_image=grayscale_image,
+        cutoff=cutoff,
+        measurement_source=run.get("measurement_source", "cleaned"),
+        color_image=color_image,
+        cleaned_image=cleaned_image,
+        cleaned_cutoff=cutoff,
+        remove_fill=remove_fill,
+        clean_levels_image=clean_levels_image,
+        clean_cutoff=cutoff,
+        clean_radius=clean_radius,
+        clean_help=CLEAN_SIZE_HELP,
+        fill_toggle=True,
+        fill_note=_remove_fill_note(run),
+        live_margin=margin if flash_fill_off else 0,
+        on_cutoff_change=lambda: _record_threshold_preview(component_key, state_key),
+        on_clean_radius_change=lambda: _record_clean_radius(component_key, clean_key),
+        on_remove_fill_change=lambda: _record_remove_fill(component_key, clean_key),
+    )
+    left, right = st.columns(2)
+    with left:
+        st.button(
+            "Reset to saved threshold", key=f"reset_{state_key}",
+            on_click=_reset_threshold_preview, args=(state_key,), width="stretch",
+        )
+    with right:
+        st.button(
+            "Use threshold for next run", key=f"use_{state_key}",
+            disabled=not THRESHOLD_MIN <= cutoff <= THRESHOLD_MAX,
+            on_click=_use_preview_threshold, args=(cutoff,), width="stretch",
+            help=(
+                "Auto selected cutoff 0. Drag to at least 1 to use a custom threshold."
+                if cutoff == 0 else
+                "Sets Setup to this custom threshold; run analysis again to update the CSV."
+            ),
+        )
+
+    notice_key = f"threshold_adjustment_notice_{state_key}"
+    notice = st.session_state.pop(notice_key, None)
+    if notice:
+        st.success(notice, icon=":material/check_circle:")
+    marked_pairs = marked_pairs or []
+    st.caption(
+        "Saving replaces the selected mask, CSV measurements, and any saved "
+        "overlays, cutouts, and measurement axes."
+    )
+    unsavable = clean_on or not THRESHOLD_MIN <= cutoff <= THRESHOLD_MAX
+    clean_help = "Clean image is preview-only; set the clean size to 0 to overwrite."
+    overwrite_this = st.button(
+        "Overwrite this specimen",
+        key=f"apply_adjustment_{state_key}",
+        type="primary",
+        icon=":material/save:",
+        disabled=unsavable,
+        help=clean_help if clean_on else "Saves these settings to the specimen selected in View.",
+        width="stretch",
+    )
+    overwrite_marked = st.button(
+        f"Overwrite all marked specimens ({len(marked_pairs)})",
+        key=f"apply_marked_adjustment_{state_key}",
+        icon=":material/done_all:",
+        disabled=unsavable or not marked_pairs,
+        help=clean_help if clean_on else (
+            "Saves these settings to every specimen checked in Marked; each keeps "
+            "its own calibration."
+        ),
+        width="stretch",
+    )
+    if overwrite_this or overwrite_marked:
+        from mats.app.output_adjustment import (
+            apply_threshold_adjustment, apply_threshold_adjustments,
+        )
+
+        bulk = overwrite_marked
+        count = len(marked_pairs) if bulk else 1
+        try:
+            if bulk:
+                apply_threshold_adjustments(
+                    run, marked_pairs, int(cutoff), remove_fill=remove_fill,
+                    clean_margin=margin, stray_gap=gap,
+                )
+            else:
+                apply_threshold_adjustment(
+                    run, pair, int(cutoff), remove_fill=remove_fill,
+                    clean_margin=margin, stray_gap=gap,
+                )
+        except (OSError, ValueError) as exc:
+            st.error(f"Could not save adjustments: {exc}")
+        else:
+            read_results_dataframe.clear()
+            _clear_export_zip_cache()
+            st.session_state[notice_key] = (
+                f"Updated {count} specimen(s) at threshold {int(cutoff)}."
+            )
+            st.rerun()
+
+
+@st.fragment
+def render_mask_explorer(pair, run, method):
+    """Preview cleanup on one specimen's raw mask; nothing is saved."""
+    from mats.app.threshold_preview import (
+        clean_levels_for_mask, color_sample, mask_sample, pre_cleanup_mask_sample,
+        show_threshold_preview, unfilled_sample,
+    )
+
+    state_key = f"{run.get('run_id', '')}:{method}:{pair['sample_id']}"
+    component_key = f"mask_preview_{state_key}"
+    remove_fill = _remove_fill(run, state_key)
+    pre_cleanup = run.get("measurement_source") == "pre-cleanup"
+    st.markdown("**Explore and adjust output**")
+    clean_radius = _clean_radius(state_key)
+    clean_on = clean_radius > 0
+    if clean_on:
+        st.caption(CLEAN_SIZE_ON_CAPTION + " Nothing is saved.")
+    elif pre_cleanup:
+        st.caption(
+            "Showing this specimen's pre-cleanup measurement mask. Adjust the edge "
+            "margin and stray-piece distance to preview it; nothing is saved."
+        )
+    elif remove_fill:
+        st.caption(
+            "Showing the mask with flashfill removed. Adjust the edge margin to "
+            "preview it; nothing is saved."
+        )
+    else:
+        st.caption(
+            "Showing the saved measurement mask. Drag the clean size above 0 to "
+            "preview removing small specks and filling small holes in the raw mask; "
+            "nothing is saved."
+        )
+    margin, gap = _specimen_cleanup_inputs(
+        run, method, pair["sample_id"],
+        margin_active=clean_on or pre_cleanup or remove_fill,
+        gap_active=clean_on or pre_cleanup,
+    )
+    mask_status = "Saved measurement mask"
+    # Both images go to the browser, so the clean-size slider is live from 0.
+    try:
+        raw_path = Path(_raw_mask_path(pair))
+        clean_levels_image = clean_levels_for_mask(
+            str(raw_path), raw_path.stat().st_mtime_ns, gap, margin,
+        )
+        if pre_cleanup:
+            mask_image = pre_cleanup_mask_sample(
+                str(raw_path), raw_path.stat().st_mtime_ns, margin, gap,
+            )
+            mask_status = "Pre-cleanup mask: edge margin cleared and stray pieces dropped"
+        elif remove_fill:
+            mask_image = unfilled_sample(str(raw_path), margin)
+            mask_status = "Mask with hole filling removed and the edge margin cleared"
+        else:
+            shown_path = Path(pair.get("mask") or raw_path)
+            mask_image = mask_sample(str(shown_path), shown_path.stat().st_mtime_ns)
+    except (OSError, ValueError) as exc:
+        st.info(str(exc))
+        return
+    color_image = None
+    if pair.get("target_box"):
+        try:
+            color_image = color_sample(str(pair["target_box"]))
+        except ValueError:
+            pass  # The mask panel still works without the color panel.
+    show_threshold_preview(
+        key=component_key,
+        mask_image=mask_image,
+        mask_status=mask_status,
+        color_image=color_image,
+        clean_levels_image=clean_levels_image,
+        clean_radius=clean_radius,
+        clean_help=CLEAN_SIZE_HELP,
+        remove_fill=remove_fill,
+        fill_toggle=True,
+        fill_note=_remove_fill_note(run),
+        on_clean_radius_change=lambda: _record_clean_radius(component_key, state_key),
+        on_remove_fill_change=lambda: _record_remove_fill(component_key, state_key),
+    )
+
+
+def render_output_pair(pair, width=PREVIEW_IMAGE_WIDTH, mask_override=None):
     st.caption(f"Sample: {pair['sample_id']}")
     left, right = st.columns(2)
     with left:
@@ -1913,174 +2841,227 @@ def render_output_pair(pair, width=PREVIEW_IMAGE_WIDTH):
         else:
             st.caption("Target box: not available")
     with right:
-        st.image(
-            str(pair["mask"]),
-            caption="Leaf segmentation mask",
-            width=width,
-        )
-
-
-def render_output_preview(pairs, selected_sample_id=None):
-    if not pairs:
-        return
-
-    if selected_sample_id is not None:
-        selected_pairs = [
-            pair for pair in pairs
-            if str(pair["sample_id"]) == selected_sample_id
-        ]
-        st.subheader("Selected output", anchor=False)
-        if not selected_pairs:
-            st.info(
-                "No matched target-box and mask pair is available for the selected row.",
-                icon=":material/image_not_supported:",
+        if mask_override is not None:
+            st.image(mask_override, caption="Preview with flashfill removed", width=width)
+        elif pair["mask"] is not None:
+            caption = (
+                "Pre-cleanup measurement mask"
+                if pair.get("mask_source") == "pre-cleanup"
+                else "Cleaned measurement mask"
             )
-            return
-        render_output_pair(selected_pairs[0])
-        return
-
-    st.subheader("Output preview", anchor=False)
-    show_default = len(pairs) <= PREVIEW_AUTO_HIDE_THRESHOLD
-    show_preview = st.checkbox(
-        f"Show image preview ({len(pairs)} output(s))",
-        value=show_default,
-        key="show_output_preview",
-        help="Renders matched target-box / mask pairs. Hidden by default for large batches.",
-    )
-    if not show_preview:
-        return
-
-    max_count = min(PREVIEW_HARD_MAX, len(pairs))
-    if len(pairs) == 1:
-        count = 1
-    else:
-        count = st.slider(
-            "Pairs to display",
-            min_value=1,
-            max_value=max_count,
-            value=min(6, max_count),
-            key="output_preview_count",
-        )
-    st.caption(f"Showing {count} of {len(pairs)} output pair(s).")
-    for pair in pairs[:count]:
-        render_output_pair(pair)
+            st.image(str(pair["mask"]), caption=caption, width=width)
+        else:
+            st.caption("Measurement mask preview unavailable for this sample")
 
 
 def _clear_export_zip_cache():
-    """Invalidate a previously prepared ZIP when the export selection changes."""
-    st.session_state.pop("export_zip_path", None)
+    """Discard the prepared ZIP when its run or selection changes."""
+    zip_path = st.session_state.pop("export_zip_path", None)
+    st.session_state.pop("export_zip_signature", None)
+    if zip_path:
+        try:
+            Path(zip_path).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
-def render_export_section(results_path, output_path, unit_symbol):
-    """Render a clearly defined Export section: CSV-only vs. the full ZIP bundle."""
-    output_path = Path(output_path)
+def select_export_files(artifacts, methods, kinds):
+    """Select existing files from this run, including shared files just once."""
+    selected_methods = set(methods)
+    if not selected_methods:
+        return []
+    selected_kinds = set(kinds)
+    files = []
+    seen = set()
+    for item in artifacts:
+        if item.get("kind") not in selected_kinds:
+            continue
+        method = item.get("method")
+        if method is not None and method not in selected_methods:
+            continue
+        path = Path(item["path"])
+        if path not in seen and path.is_file():
+            files.append(path)
+            seen.add(path)
+    return files
+
+
+def zip_download_name(raw_name):
+    """Keep the requested download name a single ZIP filename."""
+    name = str(raw_name or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    if name in {"", ".", ".."}:
+        name = "leaf_morpho_outputs"
+    return name if name.lower().endswith(".zip") else f"{name}.zip"
+
+
+def _export_run_token(run):
+    return run.get("run_id") or "|".join(
+        str(run.get("by_method", {}).get(method, {}).get("results_path", ""))
+        for method in run.get("mask_methods", ())
+    )
+
+
+def _export_signature(run_token, files, download_name):
+    """Identify the exact ZIP contents, including files changed on disk."""
+    return (
+        run_token,
+        tuple((str(path), path.stat().st_size, path.stat().st_mtime_ns) for path in files),
+        download_name,
+    )
+
+
+def render_export_section():
+    """Choose and download files recorded for the completed analysis run."""
     st.subheader("Export", anchor=False)
-    st.caption("Download the outputs from this run. Pick exactly what you need.")
-    csv_column, zip_column = st.columns(2, vertical_alignment="top")
+    run = st.session_state.get("last_run")
+    if not run:
+        st.info("Run an analysis to see and download its saved files.", icon=":material/folder_open:")
+        st.button("Open Analyze", on_click=_switch_workspace_tab, args=("Analyze",),
+                  icon=":material/science:")
+        return
 
-    with csv_column.container(border=True):
-        st.markdown("**Measurements only**")
-        st.caption("Just the results CSV — sample IDs, area, width, length. No images.")
-        if results_path.is_file():
-            st.download_button(
-                f"Download results CSV ({unit_symbol})",
-                data=results_path.read_bytes(),
-                file_name=results_path.name,
-                mime="text/csv",
-                icon=":material/download:",
-                key="download_csv_only",
+    methods = tuple(run["mask_methods"])
+    artifacts = tuple(run.get("artifacts", ()))
+    available = tuple(item for item in artifacts if Path(item["path"]).is_file())
+    missing_count = len(artifacts) - len(available)
+    all_files = select_export_files(available, methods, (kind for kind, _ in EXPORT_FILE_TYPES))
+    _, all_bytes = estimate_zip_inputs(all_files)
+    output_path = Path(run["output_path"])
+    st.caption(f"Completed run · {len(all_files):,} saved file(s) · {human_bytes(all_bytes)}")
+    st.caption(f"Output folder: `{display_path(output_path)}`")
+    if missing_count:
+        st.warning(
+            f"{missing_count} file(s) recorded for this run are no longer available on disk. "
+            "They will be left out of downloads.",
+            icon=":material/folder_off:",
+        )
+    if not all_files:
+        st.warning("No saved files from this run are available for download.")
+        return
+
+    run_token = _export_run_token(run)
+    if st.session_state.get(EXPORT_RUN_ID_KEY) != run_token:
+        _clear_export_zip_cache()
+        st.session_state[EXPORT_RUN_ID_KEY] = run_token
+        st.session_state[EXPORT_METHODS_KEY] = list(methods)
+        st.session_state[EXPORT_ZIP_NAME_KEY] = "leaf_morpho_outputs.zip"
+        available_kinds = {item["kind"] for item in available}
+        for kind, _ in EXPORT_FILE_TYPES:
+            st.session_state[f"export_include_{kind}"] = kind in available_kinds
+
+    if len(methods) > 1:
+        chosen_methods = st.multiselect(
+            "Methods to download",
+            options=list(methods),
+            format_func=SEGMENTATION_METHOD_LABELS.get,
+            key=EXPORT_METHODS_KEY,
+            persist_state="page",
+        )
+    else:
+        chosen_methods = list(methods)
+        st.caption(f"Method: {SEGMENTATION_METHOD_LABELS[methods[0]]}")
+
+    st.markdown("**Files to include in ZIP**")
+    st.caption("These choices package existing files. Image output settings for the next run are in Setup.")
+    left, right = st.columns(2)
+    selected_kinds = []
+    for index, (kind, label) in enumerate(EXPORT_FILE_TYPES):
+        count = sum(
+            item["kind"] == kind and
+            (item.get("method") is None or item["method"] in chosen_methods)
+            for item in available
+        )
+        ever_saved = any(item["kind"] == kind for item in available)
+        with (left if index < 5 else right):
+            checked = st.checkbox(
+                f"{label} · {count} file(s)",
+                key=f"export_include_{kind}",
+                disabled=not ever_saved,
+                persist_state="page",
             )
+        if checked and count:
+            selected_kinds.append(kind)
+    st.caption(
+        "Unavailable types were not saved in this run. Image types can be enabled "
+        "in Setup before the next analysis."
+    )
+
+    selected_files = select_export_files(available, chosen_methods, selected_kinds)
+    count, total_bytes = estimate_zip_inputs(selected_files)
+    st.markdown("**Download**")
+    csv_files = select_export_files(available, chosen_methods, ("results_csv",))
+    with st.container(border=True):
+        st.markdown("**Measurement CSVs**")
+        st.caption("Download a CSV directly, regardless of the ZIP file choices above.")
+        if csv_files:
+            for path in csv_files:
+                with open(path, "rb") as csv_file:
+                    st.download_button(
+                        f"Download {path.name}",
+                        data=csv_file,
+                        file_name=path.name,
+                        mime="text/csv",
+                        icon=":material/download:",
+                        key=f"download_csv_{path.name}",
+                    )
         else:
-            st.caption("Not available yet.")
+            st.caption("No results CSV is available for the selected method(s).")
 
-    base_files = gather_output_files(output_path, results_path)
-    with zip_column.container(border=True):
-        st.markdown("**Full export (ZIP)**")
-        st.caption(
-            "Results CSV + failure log + segmentation masks + specimen photos, "
-            "bundled together."
-        )
-        if not base_files:
-            st.caption("No output files found yet.")
-            return
-
-        pair_count = len(list(output_path.glob("*_mask.png")))
-        include_overlay = st.checkbox(
-            "Include overlay images (mask highlighted on photo)",
-            key="export_include_overlay",
-            help=(
-                "One extra JPG per specimen: the photo with the detected leaf "
-                "region tinted and outlined, for visually checking segmentation "
-                "accuracy."
-            ),
-            on_change=_clear_export_zip_cache,
+    with st.container(border=True):
+        st.markdown("**Selected files (ZIP)**")
+        raw_name = st.text_input(
+            "ZIP filename",
+            key=EXPORT_ZIP_NAME_KEY,
+            max_chars=120,
             persist_state="page",
         )
-        include_cutout = st.checkbox(
-            "Include specimen cutouts (background removed)",
-            key="export_include_cutout",
-            help=(
-                "One extra JPG per specimen: just the leaf pixels, with the "
-                "background blacked out."
-            ),
-            on_change=_clear_export_zip_cache,
-            persist_state="page",
-        )
-        enabled_extra_count = int(include_overlay) + int(include_cutout)
-
-        count, total_bytes = estimate_zip_inputs(base_files)
-        if enabled_extra_count and pair_count:
-            target_box_paths = list(output_path.glob("*_target_box.jpg"))
-            avg_target_box_bytes = (
-                sum(path.stat().st_size for path in target_box_paths) / len(target_box_paths)
-                if target_box_paths
-                else 0
-            )
-            count += pair_count * enabled_extra_count
-            total_bytes += int(pair_count * avg_target_box_bytes * enabled_extra_count)
-
-        st.caption(f"{count} file(s), ~{human_bytes(total_bytes)} uncompressed.")
+        download_name = zip_download_name(raw_name)
+        st.caption(f"{count:,} file(s) · {human_bytes(total_bytes)} uncompressed")
+        with st.expander(f"View files in ZIP ({count:,})"):
+            for path in selected_files[:200]:
+                st.write(path.name)
+            if count > 200:
+                st.caption(f"Showing the first 200 of {count:,} files.")
         if total_bytes > ZIP_SIZE_WARN_BYTES:
             st.warning(
                 f"Outputs total ~{human_bytes(total_bytes)}. Building a ZIP this large can be "
                 f"slow and memory-heavy. Consider collecting files directly from "
-                f"`{display_path(output_path)}` "
-                "instead."
+                f"`{display_path(output_path)}` instead."
             )
 
-        if st.button("Prepare ZIP for download", icon=":material/folder_zip:"):
-            large_batch = enabled_extra_count and pair_count > LARGE_BATCH_THRESHOLD
-            if large_batch:
-                with st.spinner("Generating overlay/cutout images..."):
-                    generate_export_overlays(output_path, include_overlay, include_cutout)
+        try:
+            signature = _export_signature(run_token, selected_files, download_name)
+        except OSError:
+            st.warning("A selected file changed or disappeared. Refresh Export and try again.")
+            _clear_export_zip_cache()
+            return
+        if st.session_state.get("export_zip_signature") != signature:
+            _clear_export_zip_cache()
+        if st.button("Prepare ZIP for download", icon=":material/folder_zip:",
+                     key="prepare_zip_export", disabled=not selected_files):
+            dest = None
+            try:
                 with st.spinner("Building ZIP..."):
-                    files = gather_output_files(
-                        output_path, results_path, include_overlay, include_cutout
-                    )
-                    dest = Path(tempfile.gettempdir()) / "leaf_morpho_outputs.zip"
-                    write_output_zip(files, dest)
+                    with tempfile.NamedTemporaryFile(
+                        prefix="mats_outputs_", suffix=".zip", delete=False
+                    ) as temp_zip:
+                        dest = Path(temp_zip.name)
+                    write_output_zip(selected_files, dest)
+            except OSError as exc:
+                if dest is not None:
+                    dest.unlink(missing_ok=True)
+                st.error(f"Could not prepare the ZIP: {exc}")
             else:
-                with st.spinner("Building ZIP..."):
-                    generate_export_overlays(output_path, include_overlay, include_cutout)
-                    files = gather_output_files(
-                        output_path, results_path, include_overlay, include_cutout
-                    )
-                    dest = Path(tempfile.gettempdir()) / "leaf_morpho_outputs.zip"
-                    write_output_zip(files, dest)
-            st.session_state["export_zip_path"] = str(dest)
+                st.session_state["export_zip_path"] = str(dest)
+                st.session_state["export_zip_signature"] = signature
 
         zip_path = st.session_state.get("export_zip_path")
         if zip_path and Path(zip_path).is_file():
-            contents = ["target boxes", "masks", "CSV"]
-            if include_overlay:
-                contents.append("overlays")
-            if include_cutout:
-                contents.append("cutouts")
-            with open(zip_path, "rb") as zf:
+            with open(zip_path, "rb") as zip_file:
                 st.download_button(
-                    f"Download ZIP ({', '.join(contents)})",
-                    data=zf,
-                    file_name="leaf_morpho_outputs.zip",
+                    f"Download ZIP ({count:,} files)",
+                    data=zip_file,
+                    file_name=download_name,
                     mime="application/zip",
                     icon=":material/download:",
                     key="download_zip_export",
