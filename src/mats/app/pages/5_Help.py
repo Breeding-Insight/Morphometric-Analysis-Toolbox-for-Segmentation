@@ -372,8 +372,8 @@ with st.container(border=True):
         "enabled, lists `sample_id, input_image, stage, failure_mode, status`."
     )
     st.caption(
-        "Measure from pre-cleanup masks in Setup to calculate area from all raw "
-        "foreground pixels and width/length from their full extent. A Clean size "
+        "Measure from pre-cleanup masks in Setup to calculate area and extents after "
+        "the edge margin and stray pieces are removed. A Clean size "
         "above 0 there also removes small specks and fills small holes before "
         "measuring. Each results CSV has a `.meta.json` companion recording these "
         "choices."
