@@ -4,6 +4,7 @@
 import os
 import re
 import csv
+import json
 import threading
 from itertools import combinations
 import concurrent.futures
@@ -17,11 +18,6 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 # Third-party libraries
 import numpy as np
 import cv2
-import torch
-import torch.nn.functional as F
-from PIL import Image
-from rfdetr import RFDETRLarge
-from tqdm import tqdm  # type: ignore[import-not-found]
 
 # Optional "enhanced QR reading" backends. The default install decodes QR codes
 # with OpenCV only (no system libraries). Installing the optional extra --
@@ -62,6 +58,22 @@ from .scaling import (
     validate_results_unit,
 )
 
+# Threshold presets live in a dependency-light module so the CLI parser can
+# validate them without importing torch. Re-exported for `core.THRESHOLD_LEVELS`.
+from .thresholds import THRESHOLD_LEVELS
+
+# Pre-cleanup measurements drop pieces touching the border or far from the leaf,
+# then, at a clean size above 0, small specks and holes.
+from .mask_cleanup import clear_margin, raw_measurement_mask
+from .mask_settings import (
+    CLEAN_MARGIN_DEFAULT,
+    CLEAN_SIZE_DEFAULT,
+    STRAY_GAP_DEFAULT,
+    checked_clean_margin,
+    checked_clean_size,
+    checked_stray_gap,
+)
+
 # Checkpoint resolution and constants live in mats.paths; re-exported for API
 # compatibility with callers that read core.RF_DETR_MARKER_CHECKPOINT etc.
 from .paths import (
@@ -80,12 +92,6 @@ BIREFNET_THRESHOLD = 0.5
 BIREFNET_MEAN = [0.485, 0.456, 0.406]
 BIREFNET_STD = [0.229, 0.224, 0.225]
 TARGET_BOX_SUFFIX = "_target_box"
-THRESHOLD_LEVELS = {
-    "auto": None,   # Otsu's method: threshold computed per-image from histogram
-    "low": 100,
-    "medium": 125,
-    "high": 150,
-}
 _MARKER_MODELS = {}
 _MARKER_MODEL_LOCK = threading.Lock()
 _MARKER_INFERENCE_LOCKS = {}
@@ -99,6 +105,8 @@ def resolve_rfdetr_device(device_override=None):
     forced_device = os.environ.get("RF_DETR_DEVICE")
     if forced_device:
         return forced_device.lower()
+    import torch
+
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available() and torch.backends.mps.is_built():
@@ -114,6 +122,8 @@ def get_marker_model(device_override=None):
             if device in _MARKER_MODELS:
                 return _MARKER_MODELS[device]
             from . import weights
+            from rfdetr import RFDETRLarge
+
             checkpoint = weights.ensure_weight("rf-detr")  # resolves or auto-fetches once
             model = RFDETRLarge(
                 resolution=RF_DETR_MARKER_RESOLUTION,
@@ -146,6 +156,8 @@ def pad_to_square_for_rfdetr(
     target_size=RF_DETR_MARKER_RESOLUTION,
     fill=RF_DETR_MARKER_PAD_COLOR,
 ):
+    from PIL import Image
+
     orig_w, orig_h = pil_img.size
     scale = target_size / max(orig_w, orig_h)
     new_w = int(round(orig_w * scale))
@@ -180,6 +192,8 @@ def unpad_xyxy(xyxy, pad_info):
 
 
 def detect_marker_geometry(image_bgr, confidence=RF_DETR_MARKER_CONFIDENCE, device_override=None):
+    from PIL import Image
+
     pil_img = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
     padded_img, pad_info = pad_to_square_for_rfdetr(pil_img)
     device = resolve_rfdetr_device(device_override)
@@ -213,6 +227,8 @@ def detect_marker_centers(image_bgr, confidence=RF_DETR_MARKER_CONFIDENCE, devic
 
 
 def resolve_birefnet_device(device_override=None):
+    import torch
+
     if device_override is not None:
         return torch.device(device_override)
     report = birefnet_device_report()
@@ -240,6 +256,8 @@ def get_birefnet_model(device_override=None):
 
             require_birefnet_dependencies()
             checkpoint = weights.require_local_weight("birefnet")
+            import torch
+
             model = create_birefnet_model()
             ckpt = torch.load(
                 str(checkpoint),
@@ -255,6 +273,9 @@ def get_birefnet_model(device_override=None):
 
 
 def _preprocess_birefnet_image(image_bgr, image_size=BIREFNET_IMAGE_SIZE):
+    import torch
+    from PIL import Image
+
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(image_rgb).convert("RGB")
     pil_img = pil_img.resize((image_size, image_size), Image.BILINEAR)
@@ -265,7 +286,6 @@ def _preprocess_birefnet_image(image_bgr, image_size=BIREFNET_IMAGE_SIZE):
     return tensor.unsqueeze(0)
 
 
-@torch.no_grad()
 def predict_birefnet_mask(
     image_bgr,
     image_size=BIREFNET_IMAGE_SIZE,
@@ -273,21 +293,25 @@ def predict_birefnet_mask(
     device_override=None,
 ):
     """Predict a single-channel 0/255 leaf foreground mask for a BGR image."""
-    model = get_birefnet_model(device_override)
-    device = resolve_birefnet_device(device_override)
-    orig_h, orig_w = image_bgr.shape[:2]
-    inp = _preprocess_birefnet_image(image_bgr, image_size=image_size).to(device)
+    import torch
+    import torch.nn.functional as F
 
-    outputs = model(inp)
-    pred = outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
-    pred = torch.sigmoid(pred)
-    pred = F.interpolate(
-        pred,
-        size=(orig_h, orig_w),
-        mode="bilinear",
-        align_corners=False,
-    )
-    return (pred[0, 0].cpu().numpy() > threshold).astype(np.uint8) * 255
+    with torch.no_grad():
+        model = get_birefnet_model(device_override)
+        device = resolve_birefnet_device(device_override)
+        orig_h, orig_w = image_bgr.shape[:2]
+        inp = _preprocess_birefnet_image(image_bgr, image_size=image_size).to(device)
+
+        outputs = model(inp)
+        pred = outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
+        pred = torch.sigmoid(pred)
+        pred = F.interpolate(
+            pred,
+            size=(orig_h, orig_w),
+            mode="bilinear",
+            align_corners=False,
+        )
+        return (pred[0, 0].cpu().numpy() > threshold).astype(np.uint8) * 255
 
 # QReader instantiation downloads a detector model, so defer it until an
 # enhanced decode is actually needed (and only if the optional extra is present).
@@ -577,7 +601,7 @@ def white_out_marker_boxes(image_bgr, marker_boxes):
     return whitefilled_image
 
 
-def clean_leaf_mask(binary_mask):
+def clean_leaf_mask(binary_mask, *, fill_holes=True):
     # Re-join tiny breaks using morphological closing (dilate then erode).
     h, w = binary_mask.shape[:2]
     k = max(3, min(11, ((min(h, w) // 300) * 2) + 3))
@@ -590,10 +614,22 @@ def clean_leaf_mask(binary_mask):
     contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if len(contours) > 0:
         largest_contour = max(contours, key=cv2.contourArea)
-        binary_mask = np.zeros(binary_mask.shape, dtype=np.uint8)
-        cv2.drawContours(binary_mask, [largest_contour], -1, (255), thickness=cv2.FILLED)
+        largest_mask = np.zeros(binary_mask.shape, dtype=np.uint8)
+        cv2.drawContours(largest_mask, [largest_contour], -1, (255), thickness=cv2.FILLED)
+        binary_mask = (
+            largest_mask if fill_holes else cv2.bitwise_and(binary_mask, largest_mask)
+        )
 
     return binary_mask
+
+
+def unfilled_leaf_mask(raw_mask, clean_margin=CLEAN_MARGIN_DEFAULT):
+    """MATS cleanup without flash fill, after clearing the template's edge margin.
+
+    Used by Remove flashfill. The margin goes first so the printed box outline
+    can never be kept as, or joined to, the largest object.
+    """
+    return clean_leaf_mask(clear_margin(raw_mask, clean_margin), fill_holes=False)
 
 
 def keep_largest_mask_component(binary_mask):
@@ -610,17 +646,66 @@ def keep_largest_mask_component(binary_mask):
     return largest_mask
 
 
-def create_leaf_mask(target_box, mask_method, threshold_value, device_override=None):
-    if mask_method == "threshold":
-        binary_mask = threshold_mask(target_box, threshold_value)
+MASK_METHODS = ("threshold", "birefnet")
+
+
+def resolve_mask_methods(mask_method):
+    """Normalize a mask-method choice into an ordered tuple of methods.
+
+    Accepts ``"threshold"``, ``"birefnet"``, ``"both"``, or an iterable of
+    method names. Duplicates are dropped; order follows the input, except that
+    ``"both"`` expands to ``MASK_METHODS`` order.
+    """
+    if isinstance(mask_method, str):
+        methods = MASK_METHODS if mask_method == "both" else (mask_method,)
     else:
-        binary_mask = predict_birefnet_mask(target_box, device_override=device_override)
+        methods = tuple(dict.fromkeys(mask_method or ()))
+    if not methods:
+        raise ValueError("choose at least one mask method")
+    unknown = [method for method in methods if method not in MASK_METHODS]
+    if unknown:
+        raise ValueError(f"Unknown segmentation method: {unknown[0]}")
+    return methods
 
-    if not np.any(binary_mask):
-        return None
 
-    binary_mask = clean_leaf_mask(binary_mask)
-    return binary_mask
+def method_suffixed_path(path, method):
+    """Insert ``_{method}`` before the extension: results.csv -> results_threshold.csv."""
+    root, ext = os.path.splitext(path)
+    return f"{root}_{method}{ext}"
+
+
+def create_leaf_mask(target_box, mask_method, threshold_value, device_override=None):
+    _, cleaned = segment_leaf(target_box, mask_method, threshold_value, device_override)
+    return cleaned
+
+
+def segment_leaf(target_box, mask_method, threshold_value, device_override=None):
+    """Return the binary segmentation before and after measurement cleanup."""
+    if mask_method == "threshold":
+        raw = threshold_mask(target_box, threshold_value)
+    elif mask_method == "birefnet":
+        raw = predict_birefnet_mask(target_box, device_override=device_override)
+    else:
+        raise ValueError(f"Unknown segmentation method: {mask_method}")
+    if not np.any(raw):
+        return None, None
+    return raw, clean_leaf_mask(raw.copy())
+
+
+def build_overlay_image(target_box, binary_mask, color=(255, 0, 255), alpha=0.4):
+    mask_bool = binary_mask.astype(bool)
+    tint = np.full_like(target_box, color, dtype=target_box.dtype)
+    blended = cv2.addWeighted(target_box, 1.0 - alpha, tint, alpha, 0)
+    overlay = target_box.copy()
+    overlay[mask_bool] = blended[mask_bool]
+    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    thickness = max(2, min(6, min(target_box.shape[:2]) // 300))
+    cv2.drawContours(overlay, contours, -1, color, thickness)
+    return overlay
+
+
+def build_cutout_image(target_box, binary_mask):
+    return cv2.bitwise_and(target_box, target_box, mask=binary_mask)
 
 
 def leaf_bounding_rect(binary_mask):
@@ -634,8 +719,20 @@ def leaf_bounding_rect(binary_mask):
     return cv2.boundingRect(largest_contour)
 
 
-def draw_measurement_axes(target_box, binary_mask):
-    rect = leaf_bounding_rect(binary_mask)
+def measurement_bounding_rect(binary_mask, measurement_source="cleaned"):
+    if measurement_source == "cleaned":
+        return leaf_bounding_rect(binary_mask)
+    if measurement_source != "pre-cleanup":
+        raise ValueError("measurement_source must be 'cleaned' or 'pre-cleanup'")
+    ys, xs = np.nonzero(binary_mask == 255)
+    if not len(xs):
+        return None
+    x, y = int(xs.min()), int(ys.min())
+    return x, y, int(xs.max()) - x + 1, int(ys.max()) - y + 1
+
+
+def draw_measurement_axes(target_box, binary_mask, measurement_source="cleaned"):
+    rect = measurement_bounding_rect(binary_mask, measurement_source)
     if rect is None:
         return None
 
@@ -672,7 +769,10 @@ def measurement_row_from_mask(
     binary_mask,
     px_per_cm_width,
     px_per_cm_height,
+    measurement_source="cleaned",
 ):
+    if measurement_source not in ("cleaned", "pre-cleanup"):
+        raise ValueError("measurement_source must be 'cleaned' or 'pre-cleanup'")
     if px_per_cm_width is None or px_per_cm_height is None:
         return measurement_na_row(sample_id, "SCALE: physical dimensions unavailable")
     if px_per_cm_width <= 0 or px_per_cm_height <= 0:
@@ -682,7 +782,7 @@ def measurement_row_from_mask(
     if white_pixels == 0:
         return measurement_na_row(sample_id, "LEAF_MASK: leaf not detected")
 
-    rect = leaf_bounding_rect(binary_mask)
+    rect = measurement_bounding_rect(binary_mask, measurement_source)
     if rect is None:
         return measurement_na_row(sample_id, "LEAF_MASK: leaf contour not detected")
 
@@ -784,13 +884,13 @@ def warning_report_rows(input_image, result):
     return rows
 
 
-def write_failure_report(failure_rows, output_dir):
+def write_failure_report(failure_rows, output_dir, file_name="leaf_morpho_failures.csv"):
     if not failure_rows:
         return None
 
     report_dir = output_dir if output_dir is not False else os.getcwd()
     os.makedirs(report_dir, exist_ok=True)
-    report_path = os.path.join(report_dir, "leaf_morpho_failures.csv")
+    report_path = os.path.join(report_dir, file_name)
     fieldnames = ["sample_id", "input_image", "stage", "failure_mode", "status"]
     with open(report_path, "w", newline="") as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -812,7 +912,19 @@ def leaf_morpho(
     save_measurement_axes=True,
     execution_device="auto",
     qr_backend_fields=None,
+    export_options=None,
+    measurement_source="cleaned",
+    stray_gap=STRAY_GAP_DEFAULT,
+    clean_margin=CLEAN_MARGIN_DEFAULT,
+    clean_size=CLEAN_SIZE_DEFAULT,
 ):
+    if measurement_source not in ("cleaned", "pre-cleanup"):
+        raise ValueError("measurement_source must be 'cleaned' or 'pre-cleanup'")
+    if output_mode != "masks" and measurement_source == "pre-cleanup":
+        raise ValueError("pre-cleanup measurements require output_mode='masks'")
+    stray_gap = checked_stray_gap(stray_gap)
+    clean_margin = checked_clean_margin(clean_margin)
+    clean_size = _checked_run_clean_size(clean_size, measurement_source)
     if execution_device not in {"auto", "cpu", "hybrid"}:
         raise ValueError("execution_device must be 'auto', 'cpu', or 'hybrid'")
     device_override = "cpu" if execution_device == "cpu" else None
@@ -831,32 +943,177 @@ def leaf_morpho(
     else:
         qr_backend_fields = tuple(qr_backend_fields)
     qr_trace = {field: "not_reached" for field in qr_backend_fields}
+    methods = resolve_mask_methods(mask_method)
+    # With several measurement methods, each writes its own suffixed files and
+    # gets its own result; a single method keeps the original file names.
+    multi = len(methods) > 1
+    options = export_options or {}
+    pre_cleanup_methods = tuple(options.get("pre_cleanup_methods", ()))
+    artifacts = []
+    preview_artifacts = []
+    warnings = []
+
+    def _save(kind, image, suffix, method=None, sink=None):
+        if output_dir is False:
+            return
+        path = os.path.join(output_dir, f"{file_name}{suffix}")
+        try:
+            if not cv2.imwrite(path, image):
+                raise OSError("image writer returned false")
+        except Exception as exc:
+            (warnings if sink is None else sink).append(
+                f"EXPORT: {kind} could not be written: {exc}"
+            )
+            return
+        artifacts.append({"path": path, "sample_id": file_name, "kind": kind, "method": method})
+
+    def _save_preview(kind, image, suffix, method=None):
+        preview_dir = options.get("preview_dir")
+        if not preview_dir:
+            return
+        path = os.path.join(preview_dir, f"{file_name}{suffix}")
+        try:
+            if cv2.imwrite(path, image):
+                preview_artifacts.append({
+                    "path": path, "sample_id": file_name, "kind": kind, "method": method,
+                })
+        except Exception:
+            # Preview availability must not change a specimen's measurement.
+            pass
+
+    def _segment_target(target_box):
+        """Segment once per method; return its selected measurement mask."""
+        segmented = {}
+        for method in dict.fromkeys(methods + pre_cleanup_methods):
+            measured = method in methods
+            # Method-specific warnings stay with that method's result in a
+            # multi-method run; otherwise they share the image's warning list.
+            method_warnings = [] if measured and multi else warnings
+            try:
+                raw, cleaned = segment_leaf(target_box, method, threshold_value, device_override)
+            except Exception as exc:
+                if measured:
+                    segmented[method] = (None, str(exc), method_warnings)
+                else:
+                    warnings.append(f"EXPORT: {method} pre-cleanup mask failed: {exc}")
+                continue
+            if raw is None:
+                if measured:
+                    segmented[method] = (None, None, method_warnings)
+                else:
+                    warnings.append(f"EXPORT: {method} detected no leaf")
+                continue
+            if method in pre_cleanup_methods:
+                _save("pre_cleanup", raw, f"_mask_precleanup_{method}.png", method, method_warnings)
+            if not measured:
+                continue
+            # The pre-cleanup export above stays the literal raw mask; the
+            # measurement clears the edge margin, drops stray pieces, and at a
+            # clean size above 0 removes small specks and fills small holes.
+            measurement_mask = (
+                raw_measurement_mask(raw, clean_margin, stray_gap, clean_size)
+                if measurement_source == "pre-cleanup" else cleaned
+            )
+            segmented[method] = (measurement_mask, None, method_warnings)
+            suffix = f"_{method}" if multi else ""
+            # The explorer re-cleans the raw mask with each specimen's settings.
+            _save_preview(
+                "preview_raw_mask", raw, f"_preview_raw_mask{suffix}.png", method
+            )
+            if measurement_source == "pre-cleanup" or not options.get("cleaned_masks", True):
+                _save_preview(
+                    "preview_mask", measurement_mask, f"_preview_mask{suffix}.png", method
+                )
+            if options.get("cleaned_masks", True):
+                _save("mask", cleaned, f"_mask{suffix}.png", method, method_warnings)
+            if options.get("axes", save_measurement_axes):
+                try:
+                    axes = draw_measurement_axes(target_box, measurement_mask, measurement_source)
+                    if axes is not None:
+                        _save("axes", axes, f"_measurement_axes{suffix}.jpg", method, method_warnings)
+                except Exception as exc:
+                    method_warnings.append(f"EXPORT: axes failed: {exc}")
+            if options.get("overlay", False):
+                try:
+                    _save("overlay", build_overlay_image(target_box, measurement_mask),
+                          f"_overlay{suffix}.jpg", method, method_warnings)
+                except Exception as exc:
+                    method_warnings.append(f"EXPORT: overlay failed: {exc}")
+            if options.get("cutout", False):
+                try:
+                    _save("cutout", build_cutout_image(target_box, measurement_mask),
+                          f"_cutout{suffix}.jpg", method, method_warnings)
+                except Exception as exc:
+                    method_warnings.append(f"EXPORT: cutout failed: {exc}")
+        return segmented
 
     def _with_qr_trace(result_row):
         if not qr_trace:
             return result_row
         return {**result_row, **qr_trace}
 
-    def _fail(stage: str, msg: str):
+    def _combined_warnings(extra_warnings):
+        combined = list(warnings)
+        if extra_warnings is not None and extra_warnings is not warnings:
+            combined.extend(extra_warnings)
+        return combined
+
+    def _fail(stage: str, msg: str, extra_warnings=None):
         status = f'{stage}: {msg}'
         return {
             'sample_id': file_name,
             'status': status,
             'result_row': _with_qr_trace(measurement_na_row(file_name, status)),
+            'artifacts': artifacts,
+            'preview_artifacts': preview_artifacts,
+            'warnings': _combined_warnings(extra_warnings),
         }
 
-    def _ok(result_row, warnings=None):
+    def _ok(result_row, extra_warnings=None):
         result = {
             'sample_id': file_name,
             'status': 'ok',
             'result_row': _with_qr_trace(result_row),
+            'artifacts': artifacts,
+            'preview_artifacts': preview_artifacts,
         }
-        if warnings:
-            result['warnings'] = warnings
+        combined_warnings = _combined_warnings(extra_warnings)
+        if combined_warnings:
+            result['warnings'] = combined_warnings
         return result
 
+    def _measured(stage, segmented, scale_axes, scale_status):
+        """Measure each method's mask against the shared scale.
+
+        One method returns its result directly; several return
+        ``{'method_results': {method: result}}`` for the batch to split.
+        """
+        results = {}
+        for method in methods:
+            measurement_mask, error, method_warnings = segmented[method]
+            if measurement_mask is None:
+                results[method] = _fail(stage, error or "leaf not detected", method_warnings)
+                continue
+            try:
+                if scale_axes is None:
+                    row = measurement_na_row(file_name, scale_status)
+                else:
+                    row = measurement_row_from_mask(
+                        file_name, measurement_mask, *scale_axes, measurement_source
+                    )
+            except Exception as exc:
+                print(f"[leaf_morpho] ERROR '{input_image}' at {stage} ({method}): {exc}")
+                results[method] = _fail(stage, f"unexpected error: {exc}", method_warnings)
+                continue
+            results[method] = _ok(row, method_warnings)
+        if not multi:
+            return results[methods[0]]
+        return {
+            'sample_id': file_name, 'artifacts': artifacts,
+            'preview_artifacts': preview_artifacts, 'method_results': results,
+        }
+
     stage = "START"
-    warnings = []
     scale_failure = None
 
     try:
@@ -868,47 +1125,24 @@ def leaf_morpho(
 
         if is_target_box_input:
             target_box = image
+            _save_preview("preview_target_box", target_box, "_preview_target_box.png")
             if output_mode == "target-boxes":
                 return _ok(measurement_na_row(file_name, "OUTPUT_MODE: target-boxes only"))
 
             stage = "LEAF_MASK"
-            binary_mask = create_leaf_mask(
-                target_box,
-                mask_method,
-                threshold_value,
-                device_override,
-            )
-            if binary_mask is None:
-                return _fail(stage, "leaf not detected")
-
-            if output_dir is not False:
-                output_path = os.path.join(output_dir, f"{file_name}_mask.png")
-                cv2.imwrite(output_path, binary_mask)
-                if save_measurement_axes:
-                    save_measurement_axes_image(output_dir, file_name, target_box, binary_mask)
+            segmented = _segment_target(target_box)
 
             if template_dimensions is None:
-                return _ok(
-                    measurement_na_row(
-                        file_name,
-                        "SCALE: target_box input requires --sheet-dimensions or legacy --template-dimensions",
-                    ),
-                    warnings,
+                scale_axes = None
+                scale_status = (
+                    "SCALE: target_box input requires --sheet-dimensions or legacy --template-dimensions"
                 )
+            else:
+                width, height, unit = template_dimensions
+                scale_axes = px_per_cm_axes(target_box.shape[:2], width, height, unit)
+                scale_status = "SCALE: invalid calibration dimensions"
 
-            width, height, unit = template_dimensions
-            scale_axes = px_per_cm_axes(target_box.shape[:2], width, height, unit)
-            if scale_axes is None:
-                return _ok(measurement_na_row(file_name, "SCALE: invalid calibration dimensions"))
-
-            return _ok(
-                measurement_row_from_mask(
-                    file_name,
-                    binary_mask,
-                    *scale_axes,
-                ),
-                warnings,
-            )
+            return _measured(stage, segmented, scale_axes, scale_status)
 
         masked_img = image.copy()
 
@@ -1040,49 +1274,25 @@ def leaf_morpho(
         if target_box is None or target_box.size == 0:
             return _fail(stage, "failed to compute target box")
 
-        if output_dir is not False:
-            # Save the expanded crop to the output directory
-            output_path = os.path.join(output_dir, f"{file_name}_target_box.jpg")
-            cv2.imwrite(output_path, target_box)
+        if "threshold" in methods or not options.get("target_boxes", True):
+            _save_preview("preview_target_box", target_box, "_preview_target_box.png")
+
+        if options.get("target_boxes", True):
+            _save("target_box", target_box, "_target_box.jpg")
 
         if output_mode == "target-boxes":
             return _ok(measurement_na_row(file_name, "OUTPUT_MODE: target-boxes only"), warnings)
 
         stage = "LEAF_MASK"
-        binary_mask = create_leaf_mask(
-            target_box,
-            mask_method,
-            threshold_value,
-            device_override,
-        )
-        if binary_mask is None:
-            return _fail(stage, "leaf not detected")
-
-        # Save ONLY the refined (most accurate) mask.
-        # NOTE: This replaces older outputs:
-        # - *_binary_mask.jpg
-        # - *_masked.jpg
-        # - *_accurately_masked_leaf.jpg
-        if output_dir is not False:
-            output_path = os.path.join(output_dir, f"{file_name}_mask.png")
-            cv2.imwrite(output_path, binary_mask)
-            if save_measurement_axes:
-                save_measurement_axes_image(output_dir, file_name, target_box, binary_mask)
+        segmented = _segment_target(target_box)
 
         scale_axes = px_per_cm_axes(target_box.shape[:2], width, height, unit)
-        if scale_axes is None:
-            result_row = measurement_na_row(
-                file_name,
-                scale_failure or "SCALE: physical dimensions unavailable",
-            )
-        else:
-            result_row = measurement_row_from_mask(
-                file_name,
-                binary_mask,
-                *scale_axes,
-            )
-
-        return _ok(result_row, warnings)
+        return _measured(
+            stage,
+            segmented,
+            scale_axes,
+            scale_failure or "SCALE: physical dimensions unavailable",
+        )
 
     except Exception as e:
         print(f"[leaf_morpho] ERROR '{input_image}' at {stage}: {e}")
@@ -1097,6 +1307,7 @@ def _process_batch_image(
     mask_method,
     threshold_value,
     save_measurement_axes,
+    export_options,
     execution_device,
     qr_backend_fields,
 ):
@@ -1112,8 +1323,21 @@ def _process_batch_image(
         save_measurement_axes,
         execution_device,
         qr_backend_fields,
+        export_options=export_options,
+        measurement_source=export_options.get("measurement_source", "cleaned"),
+        stray_gap=export_options.get("stray_gap", STRAY_GAP_DEFAULT),
+        clean_margin=export_options.get("clean_margin", CLEAN_MARGIN_DEFAULT),
+        clean_size=export_options.get("clean_size", CLEAN_SIZE_DEFAULT),
     )
     return input_image, result, None
+
+
+def _checked_run_clean_size(clean_size, measurement_source):
+    """Validate a run's clean size; above 0 it needs pre-cleanup measurements."""
+    clean_size = checked_clean_size(clean_size)
+    if clean_size and measurement_source != "pre-cleanup":
+        raise ValueError("clean_size requires measurement_source='pre-cleanup'")
+    return clean_size
 
 
 def run_leaf_morpho_batch(
@@ -1136,6 +1360,11 @@ def run_leaf_morpho_batch(
     break_glass_acknowledged=False,
     birefnet_parallel_acknowledged=False,
     results_unit="cm",
+    export_options=None,
+    measurement_source="cleaned",
+    stray_gap=STRAY_GAP_DEFAULT,
+    clean_margin=CLEAN_MARGIN_DEFAULT,
+    clean_size=CLEAN_SIZE_DEFAULT,
 ):
     """Run the leaf morphometrics pipeline with per-image error isolation.
 
@@ -1146,12 +1375,58 @@ def run_leaf_morpho_batch(
     enabled, counts above 75% of the available CPU allocation require an
     explicit ``break_glass_acknowledged`` override. CPU-parallel BiRefNet
     additionally requires its own explicit acknowledgement.
+
+    ``mask_method`` may name several methods (``"both"`` or a sequence). Each
+    image is then marker-detected once and measured once per method, and each
+    method gets its own results CSV and failure log, suffixed ``_{method}``
+    (``results_threshold.csv``). ``by_method`` holds the per-method summary;
+    top-level ``succeeded``/``failed`` count images, where an image succeeds
+    only when every method measured it.
+
+    ``measurement_source='pre-cleanup'`` measures each method's raw mask after
+    clearing a ``clean_margin`` percent band along the target-box edge and
+    dropping pieces that touch that band or lie more than ``stray_gap`` times the
+    leaf's bounding-box diagonal from it (``mask_cleanup.clean_raw_mask``). A
+    ``clean_size`` above 0 (pre-cleanup only) then removes white specks and fills
+    enclosed holes whose inscribed radius is below that many pixels
+    (``mask_cleanup.raw_measurement_mask``).
     """
     input_images = list(input_images or [])
+    if measurement_source not in ("cleaned", "pre-cleanup"):
+        raise ValueError("measurement_source must be 'cleaned' or 'pre-cleanup'")
+    stray_gap = checked_stray_gap(stray_gap)
+    clean_margin = checked_clean_margin(clean_margin)
+    clean_size = _checked_run_clean_size(clean_size, measurement_source)
+    methods = resolve_mask_methods(mask_method)
+    if output_mode != "masks" and measurement_source == "pre-cleanup":
+        raise ValueError("pre-cleanup measurements require output_mode='masks'")
+    if output_mode != "masks":
+        # Target-box runs never segment, so they keep a single, unsuffixed CSV.
+        methods = methods[:1]
+    multi = len(methods) > 1
+    options = dict(export_options or {})
+    options["measurement_source"] = measurement_source
+    options["stray_gap"] = stray_gap
+    options["clean_margin"] = clean_margin
+    options["clean_size"] = clean_size
+    if options.get("preview_dir"):
+        os.makedirs(options["preview_dir"], exist_ok=True)
+    pre_cleanup = tuple(dict.fromkeys(options.get("pre_cleanup_methods", ())))
+    if any(method not in MASK_METHODS for method in pre_cleanup):
+        raise ValueError("pre_cleanup_methods must contain only threshold or birefnet")
+    options["pre_cleanup_methods"] = pre_cleanup if output_mode == "masks" else ()
+    needs_birefnet = output_mode == "masks" and (
+        "birefnet" in methods or "birefnet" in options["pre_cleanup_methods"]
+    )
+    sample_ids = [target_box_sample_id(p) if is_target_box_image(p)
+                  else os.path.splitext(os.path.basename(p))[0] for p in input_images]
+    sample_keys = [sample_id.casefold() for sample_id in sample_ids]
+    if len(sample_keys) != len(set(sample_keys)):
+        raise ValueError("Input images contain duplicate sample IDs; use unique basenames")
     if execution_device not in {"auto", "cpu", "hybrid"}:
         raise ValueError("execution_device must be 'auto', 'cpu', or 'hybrid'")
     validate_results_unit(results_unit)
-    if execution_device == "hybrid" and mask_method != "threshold":
+    if execution_device == "hybrid" and needs_birefnet:
         raise ValueError("hybrid execution is currently supported for Otsu thresholding only")
     if output_dir is not False:
         os.makedirs(output_dir, exist_ok=True)
@@ -1166,7 +1441,9 @@ def run_leaf_morpho_batch(
     )
 
     if workers is None:
-        workers, worker_reason = default_worker_count(input_images, output_mode, mask_method)
+        workers, worker_reason = default_worker_count(
+            input_images, output_mode, "birefnet" if needs_birefnet else methods[0]
+        )
     else:
         worker_reason = "user override"
     workers = max(1, int(workers))
@@ -1181,7 +1458,7 @@ def run_leaf_morpho_batch(
                 f"{workers} workers uses {worker_risk.utilization:.0%} of the available CPU allocation. "
                 "High-risk worker counts require break-glass acknowledgement."
             )
-        if mask_method == "birefnet" and workers > 1 and not birefnet_parallel_acknowledged:
+        if needs_birefnet and workers > 1 and execution_device == "cpu" and not birefnet_parallel_acknowledged:
             raise ValueError(
                 "CPU-parallel BiRefNet requires a separate break-glass acknowledgement."
             )
@@ -1190,7 +1467,7 @@ def run_leaf_morpho_batch(
         serialize_model_inference
         and execution_device == "auto"
         and workers > 1
-        and (mask_method == "birefnet" or not all_target_boxes)
+        and (needs_birefnet or not all_target_boxes)
     ):
         workers = 1
         worker_reason = f"{worker_reason}; serialized for model-backed UI inference"
@@ -1198,49 +1475,88 @@ def run_leaf_morpho_batch(
     succeeded = 0
     failed = 0
     processed = 0
-    failure_rows = []
-    result_rows = []
+    artifacts = []
+    preview_artifacts = []
+    # One tally per measurement method: its rows, failures, and output files.
+    tallies = {
+        method: {
+            "succeeded": 0,
+            "failed": 0,
+            "failure_rows": [],
+            "result_rows": [],
+            "results_path": (
+                method_suffixed_path(results_path, method)
+                if multi and results_path else results_path
+            ),
+        }
+        for method in methods
+    }
 
-    def _record_result(input_image, result, exception=None):
-        nonlocal succeeded, failed, processed
+    def _write_results(tally):
+        if compact_csv:
+            write_compact_results_csv(tally["result_rows"], tally["results_path"], results_unit)
+        else:
+            write_results_csv(
+                tally["result_rows"],
+                tally["results_path"],
+                qr_backend_fields,
+                results_unit,
+            )
+
+    def _record_method(tally, input_image, result, exception):
+        """Record one method's outcome for an image; return whether it succeeded."""
         if exception is not None:
-            failed += 1
-            failure_rows.append(failure_report_row(input_image, exception=exception))
+            tally["failed"] += 1
+            tally["failure_rows"].append(failure_report_row(input_image, exception=exception))
             sample_id = os.path.splitext(os.path.basename(input_image))[0]
             row = measurement_na_row(sample_id, f"EXCEPTION: {exception}")
             row.update({field: "not_reached" for field in qr_backend_fields})
-            result_rows.append(row)
-        elif result and result.get("result_row"):
-            result_rows.append(result["result_row"])
+            tally["result_rows"].append(row)
+            return False
+        if result and result.get("result_row"):
+            tally["result_rows"].append(result["result_row"])
             if result.get("status") == "ok":
-                succeeded += 1
-                failure_rows.extend(warning_report_rows(input_image, result))
-            else:
-                failed += 1
-                failure_rows.append(failure_report_row(input_image, result=result))
-                failure_rows.extend(warning_report_rows(input_image, result))
+                tally["succeeded"] += 1
+                tally["failure_rows"].extend(warning_report_rows(input_image, result))
+                return True
+            tally["failed"] += 1
+            tally["failure_rows"].append(failure_report_row(input_image, result=result))
+            tally["failure_rows"].extend(warning_report_rows(input_image, result))
+            return False
+        tally["failed"] += 1
+        tally["failure_rows"].append(failure_report_row(
+            input_image,
+            result={"status": "UNKNOWN: no result returned"},
+        ))
+        sample_id = os.path.splitext(os.path.basename(input_image))[0]
+        row = measurement_na_row(sample_id, "UNKNOWN: no result returned")
+        row.update({field: "not_reached" for field in qr_backend_fields})
+        tally["result_rows"].append(row)
+        return False
+
+    def _record_result(input_image, result, exception=None):
+        nonlocal succeeded, failed, processed
+        if exception is None and result:
+            artifacts.extend(result.get("artifacts", ()))
+            preview_artifacts.extend(result.get("preview_artifacts", ()))
+        # A multi-method result carries one result per method; anything else
+        # (a single method, or a failure before segmentation) applies to all.
+        method_results = (result or {}).get("method_results") or {
+            method: result for method in methods
+        }
+        outcomes = [
+            _record_method(tallies[method], input_image, method_results.get(method), exception)
+            for method in methods
+        ]
+        if all(outcomes):
+            succeeded += 1
         else:
             failed += 1
-            failure_rows.append(failure_report_row(
-                input_image,
-                result={"status": "UNKNOWN: no result returned"},
-            ))
-            sample_id = os.path.splitext(os.path.basename(input_image))[0]
-            row = measurement_na_row(sample_id, "UNKNOWN: no result returned")
-            row.update({field: "not_reached" for field in qr_backend_fields})
-            result_rows.append(row)
 
         processed += 1
         if results_path and processed % csv_update_interval == 0:
-            if compact_csv:
-                write_compact_results_csv(result_rows, results_path, results_unit)
-            else:
-                write_results_csv(
-                    result_rows,
-                    results_path,
-                    qr_backend_fields,
-                    results_unit,
-                )
+            for tally in tallies.values():
+                _write_results(tally)
         if progress_callback is not None:
             progress_callback({
                 "processed": processed,
@@ -1258,9 +1574,10 @@ def run_leaf_morpho_batch(
                     output_dir,
                     template_dimensions,
                     output_mode,
-                    mask_method,
+                    methods,
                     threshold_value,
                     save_measurement_axes,
+                    options,
                     execution_device,
                     qr_backend_fields,
                 )
@@ -1276,9 +1593,10 @@ def run_leaf_morpho_batch(
                     output_dir,
                     template_dimensions,
                     output_mode,
-                    mask_method,
+                    methods,
                     threshold_value,
                     save_measurement_axes,
+                    options,
                     execution_device,
                     qr_backend_fields,
                 ): input_image
@@ -1294,35 +1612,79 @@ def run_leaf_morpho_batch(
                     _record_result(input_image, None, exc)
 
     if results_path:
-        if compact_csv:
-            write_compact_results_csv(result_rows, results_path, results_unit)
-        else:
-            write_results_csv(
-                result_rows,
-                results_path,
-                qr_backend_fields,
-                results_unit,
+        for method, tally in tallies.items():
+            _write_results(tally)
+            artifacts.append({"path": tally["results_path"], "sample_id": None,
+                              "kind": "results_csv", "method": method})
+            metadata_path = f"{tally['results_path']}.meta.json"
+            metadata = {
+                "measurement_source": measurement_source,
+                "mask_method": method,
+                "results_unit": results_unit,
+                "csv_schema": "compact" if compact_csv else "full",
+            }
+            if measurement_source == "pre-cleanup":
+                metadata["clean_margin"] = clean_margin
+                metadata["stray_gap"] = stray_gap
+                metadata["clean_size"] = clean_size
+            with open(metadata_path, "w", encoding="utf-8") as metadata_file:
+                json.dump(metadata, metadata_file, indent=2)
+                metadata_file.write("\n")
+            artifacts.append({"path": metadata_path, "sample_id": None,
+                              "kind": "results_metadata", "method": method})
+
+    for method, tally in tallies.items():
+        tally["failure_report_path"] = None
+        if write_failures:
+            tally["failure_report_path"] = write_failure_report(
+                tally["failure_rows"],
+                output_dir,
+                (method_suffixed_path("leaf_morpho_failures.csv", method)
+                 if multi else "leaf_morpho_failures.csv"),
             )
+            if tally["failure_report_path"]:
+                artifacts.append({"path": tally["failure_report_path"], "sample_id": None,
+                                  "kind": "failure_log", "method": method if multi else None})
 
-    failure_report_path = None
-    if write_failures:
-        failure_report_path = write_failure_report(failure_rows, output_dir)
-
-    return {
+    by_method = {
+        method: {
+            "succeeded": tally["succeeded"],
+            "failed": tally["failed"],
+            "results_path": tally["results_path"],
+            "failure_report_path": tally["failure_report_path"],
+            "failure_rows": tally["failure_rows"],
+            "result_rows": tally["result_rows"],
+            "compact_rows": [
+                compact_measurement_row(row, results_unit) for row in tally["result_rows"]
+            ],
+        }
+        for method, tally in tallies.items()
+    }
+    summary = {
         "succeeded": succeeded,
         "failed": failed,
         "processed": processed,
         "total": len(input_images),
-        "results_path": results_path,
-        "failure_report_path": failure_report_path,
-        "failure_rows": failure_rows,
-        "result_rows": result_rows,
-        "compact_rows": [
-            compact_measurement_row(row, results_unit) for row in result_rows
-        ],
+        "methods": methods,
+        "by_method": by_method,
+        "artifacts": artifacts,
+        "preview_artifacts": preview_artifacts,
         "results_unit": results_unit,
+        "measurement_source": measurement_source,
+        "clean_margin": clean_margin,
+        "stray_gap": stray_gap,
+        "clean_size": clean_size,
         "qr_backend_fields": qr_backend_fields,
         "workers": workers,
         "worker_reason": worker_reason,
         "execution_device": execution_device,
     }
+    if not multi:
+        # Single-method callers read these top-level keys. They are left out of
+        # a multi-method summary so that reading one fails loudly.
+        summary.update(
+            (key, by_method[methods[0]][key])
+            for key in ("results_path", "failure_report_path", "failure_rows",
+                        "result_rows", "compact_rows")
+        )
+    return summary

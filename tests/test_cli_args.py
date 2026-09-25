@@ -1,17 +1,23 @@
 """CLI argument parsing -- no pipeline execution, so no torch required."""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from mats.cli import (
+    _cmd_run,
+    _measured_methods,
     _normalize_argv,
+    _pre_cleanup_methods,
+    _print_run_banner,
     _require_local_birefnet_for_run,
     _resolve_fetch_only,
     _resolve_template_dims,
     build_parser,
 )
 from mats.dimensions import parse_template_dimensions
+from mats.mask_settings import CLEAN_MARGIN_DEFAULT, CLEAN_SIZE_DEFAULT, STRAY_GAP_DEFAULT
 
 
 def test_default_subcommand_inserted():
@@ -35,9 +41,138 @@ def test_run_defaults():
     assert ns.threshold_level == "auto"
     assert ns.csv_schema == "full"        # research schema by default
     assert ns.results_unit == "cm"
+    assert not ns.measure_pre_cleanup
     assert ns.save_axes is False
     assert ns.sheet_dimensions is None
     assert ns.template_dimensions is None
+    assert ns.export == []
+    assert ns.pre_cleanup_methods is None
+    assert not ns.no_target_boxes and not ns.no_masks and not ns.no_failure_log
+    assert ns.dataset_format is None
+
+
+def test_dataset_options_parse_and_validate(tmp_path, monkeypatch, capsys):
+    args = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"),
+        "--dataset-format", "yolo-seg", "--dataset-split", "60", "30", "10",
+        "--dataset-seed", "17", "--dataset-mask-source", "raw",
+    ])
+    assert args.dataset_format == "yolo-seg"
+    assert args.dataset_split == [60, 30, 10]
+    assert args.dataset_seed == 17
+    assert args.dataset_mask_source == "raw"
+
+    calls = []
+    _fake_core(monkeypatch, calls)
+    bad = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"),
+        "--dataset-format", "png", "--dataset-split", "70", "20", "9",
+    ])
+    with pytest.raises(SystemExit):
+        _cmd_run(bad)
+    assert "total 100" in capsys.readouterr().err
+    assert not calls
+
+
+def test_cli_dataset_uses_shared_pairing_and_exporter(tmp_path, monkeypatch):
+    calls = []
+    _fake_core(monkeypatch, calls)
+    fake_core = sys.modules["mats.core"]
+    image_path = tmp_path / "leaf_target_box.png"
+    mask_path = tmp_path / "leaf_mask.png"
+    image_path.write_bytes(b"image")
+    mask_path.write_bytes(b"mask")
+
+    def run_leaf_morpho_batch(**kwargs):
+        calls.append(kwargs)
+        return {
+            "succeeded": 1, "failed": 0, "workers": 1, "worker_reason": "test",
+            "methods": ("threshold",), "results_path": kwargs["results_path"],
+            "failure_report_path": None, "measurement_source": "cleaned",
+            "artifacts": [{
+                "path": str(mask_path), "sample_id": "leaf", "kind": "mask",
+                "method": "threshold",
+            }],
+            "preview_artifacts": [{
+                "path": str(image_path), "sample_id": "leaf", "kind": "preview_target_box",
+                "method": None,
+            }],
+        }
+
+    fake_core.run_leaf_morpho_batch = run_leaf_morpho_batch
+    exported = {}
+
+    def fake_write(pairs, dest, **options):
+        exported["pairs"] = pairs
+        exported["options"] = options
+        dest.write_bytes(b"zip")
+        return {"counts": {"train": 1, "val": 0, "test": 0},
+                "excluded": [], "conversion_notes": []}
+
+    monkeypatch.setattr("mats.dataset_export.write_dataset_zip", fake_write)
+    args = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"),
+        "-t", "10x10cm", "--dataset-format", "png", "--no-target-boxes",
+        "--no-masks",
+    ])
+    assert _cmd_run(args) == 0
+    assert exported["pairs"] == [{
+        "sample_id": "leaf", "target_box": str(image_path), "mask": str(mask_path),
+    }]
+    assert exported["options"]["percentages"] == (70, 20, 10)
+    assert calls[0]["export_options"]["preview_dir"]
+    assert (tmp_path / "out" / "mats_training_threshold_png.zip").read_bytes() == b"zip"
+
+
+def test_repeated_exports_and_both_methods_parse():
+    ns = build_parser().parse_args([
+        "run", "--export", "pre-cleanup", "--export", "overlay",
+        "--pre-cleanup-methods", "both", "--no-target-boxes", "--no-masks",
+    ])
+    assert ns.export == ["pre-cleanup", "overlay"]
+    assert ns.pre_cleanup_methods == "both"
+    assert ns.no_target_boxes and ns.no_masks
+
+
+def test_mask_method_both_measures_and_exports_each_method():
+    parse = build_parser().parse_args
+    both = parse(["run", "-i", "x", "--mask-method", "both", "--export", "pre-cleanup"])
+    assert both.mask_method == "both"
+    assert _measured_methods(both) == ("threshold", "birefnet")
+    assert _pre_cleanup_methods(both) == ("threshold", "birefnet")
+
+    single = parse(["run", "-i", "x", "--mask-method", "birefnet", "--export", "pre-cleanup"])
+    assert _measured_methods(single) == ("birefnet",)
+    assert _pre_cleanup_methods(single) == ("birefnet",)
+    assert _pre_cleanup_methods(parse(["run", "-i", "x", "--mask-method", "both"])) == ()
+
+
+@pytest.mark.parametrize("method", ["selected", "threshold"])
+def test_pre_cleanup_method_option_requires_export(method, tmp_path, monkeypatch, capsys):
+    calls = []
+    _fake_core(monkeypatch, calls)
+    args = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"),
+        "--pre-cleanup-methods", method,
+    ])
+    with pytest.raises(SystemExit) as exc:
+        _cmd_run(args)
+    assert exc.value.code == 2
+    assert "--pre-cleanup-methods requires --export pre-cleanup" in capsys.readouterr().err
+    assert not calls
+
+
+def test_default_pre_cleanup_method_applies_when_export_requested():
+    args = build_parser().parse_args([
+        "run", "--mask-method", "both", "--export", "pre-cleanup",
+    ])
+    assert args.pre_cleanup_methods is None
+    assert _pre_cleanup_methods(args) == ("threshold", "birefnet")
+
+
+def test_unknown_export_rejected():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run", "--export", "unknown"])
 
 
 def test_underscore_and_hyphen_aliases_agree():
@@ -54,6 +189,151 @@ def test_compact_and_axes_opt_in():
     assert ns.save_axes is True
 
 
+def test_pre_cleanup_measurement_flag_parses_independently_of_export():
+    ns = build_parser().parse_args(["run", "--measure-pre-cleanup"])
+    assert ns.measure_pre_cleanup
+    assert ns.export == []
+
+
+def test_stray_gap_defaults_and_parses():
+    parse = build_parser().parse_args
+    assert parse(["run", "-i", "x"]).stray_gap == STRAY_GAP_DEFAULT
+    assert parse(["run", "-i", "x", "--measure-pre-cleanup", "--stray-gap", "0"]).stray_gap == 0.0
+    assert parse(["run", "-i", "x", "--stray-gap", "1.5"]).stray_gap == 1.5
+
+
+@pytest.mark.parametrize("value", ["-0.1", "10.5", "nan", "inf", "far"])
+def test_stray_gap_rejects_invalid_values(value, capsys):
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["run", "-i", "x", "--stray-gap", value])
+    assert exc.value.code == 2
+    assert "--stray-gap" in capsys.readouterr().err
+
+
+def test_clean_margin_defaults_and_parses():
+    parse = build_parser().parse_args
+    assert parse(["run", "-i", "x"]).clean_margin == CLEAN_MARGIN_DEFAULT
+    assert parse(["run", "-i", "x", "--clean-margin", "0"]).clean_margin == 0.0
+    assert parse(["run", "-i", "x", "--clean-margin", "2.5"]).clean_margin == 2.5
+
+
+@pytest.mark.parametrize("value", ["-1", "10.5", "nan", "wide"])
+def test_clean_margin_rejects_invalid_values(value, capsys):
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["run", "-i", "x", "--clean-margin", value])
+    assert exc.value.code == 2
+    assert "--clean-margin" in capsys.readouterr().err
+
+
+def test_clean_size_defaults_and_parses():
+    parse = build_parser().parse_args
+    assert parse(["run", "-i", "x"]).clean_size == CLEAN_SIZE_DEFAULT == 0
+    assert parse(["run", "-i", "x", "--measure-pre-cleanup", "--clean-size", "3"]).clean_size == 3
+    assert parse(["run", "-i", "x", "--clean-size", "50"]).clean_size == 50
+
+
+@pytest.mark.parametrize("value", ["-1", "51", "2.5", "big"])
+def test_clean_size_rejects_invalid_values(value, capsys):
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["run", "-i", "x", "--clean-size", value])
+    assert exc.value.code == 2
+    assert "--clean-size" in capsys.readouterr().err
+
+
+def test_banner_reports_clean_size_for_pre_cleanup(capsys):
+    parse = build_parser().parse_args
+    _print_run_banner(parse(["run", "-i", "x", "--measure-pre-cleanup", "--clean-size", "3"]), None)
+    assert "Clean size: 3 px" in capsys.readouterr().out
+    _print_run_banner(parse(["run", "-i", "x", "--measure-pre-cleanup"]), None)
+    assert "Clean size: off" in capsys.readouterr().out
+    _print_run_banner(parse(["run", "-i", "x"]), None)
+    assert "Clean size" not in capsys.readouterr().out
+
+
+def test_banner_reports_margin_and_stray_gap_only_for_pre_cleanup(capsys):
+    parse = build_parser().parse_args
+    _print_run_banner(parse([
+        "run", "-i", "x", "--measure-pre-cleanup", "--stray-gap", "0.5", "--clean-margin", "2",
+    ]), None)
+    out = capsys.readouterr().out
+    assert "Clean margin: 2% of the target box's shorter side" in out
+    assert "Stray gap: 0.5 x leaf bounding-box diagonal" in out
+    _print_run_banner(parse(["run", "-i", "x"]), None)
+    out = capsys.readouterr().out
+    assert "Stray gap" not in out and "Clean margin" not in out
+
+
+def _fake_core(monkeypatch, calls):
+    """Stand in for mats.core so _cmd_run runs without torch."""
+    import mats
+
+    def run_leaf_morpho_batch(**kwargs):
+        calls.append(kwargs)
+        return {
+            "succeeded": 1, "failed": 0, "workers": 1, "worker_reason": "test",
+            "methods": ("threshold",), "results_path": kwargs["results_path"],
+            "failure_report_path": None,
+        }
+
+    fake = SimpleNamespace(
+        parse_template_dimensions=parse_template_dimensions,
+        method_suffixed_path=lambda path, method: path,
+        get_input_images=lambda input_dir: ["leaf.jpg"],
+        run_leaf_morpho_batch=run_leaf_morpho_batch,
+    )
+    monkeypatch.setitem(sys.modules, "mats.core", fake)
+    monkeypatch.setattr(mats, "core", fake, raising=False)
+
+
+def test_stray_gap_reaches_the_pipeline(tmp_path, monkeypatch):
+    calls = []
+    _fake_core(monkeypatch, calls)
+    args = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"), "-t", "10x10cm",
+        "--measure-pre-cleanup", "--stray-gap", "0.6", "--clean-margin", "2",
+    ])
+    assert _cmd_run(args) == 0
+    assert calls[0]["measurement_source"] == "pre-cleanup"
+    assert calls[0]["stray_gap"] == 0.6
+    assert calls[0]["clean_margin"] == 2.0
+    assert calls[0]["clean_size"] == CLEAN_SIZE_DEFAULT
+
+
+def test_clean_size_reaches_the_pipeline(tmp_path, monkeypatch):
+    calls = []
+    _fake_core(monkeypatch, calls)
+    args = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"), "-t", "10x10cm",
+        "--measure-pre-cleanup", "--threshold-level", "medium", "--clean-size", "3",
+    ])
+    assert _cmd_run(args) == 0
+    assert calls[0]["measurement_source"] == "pre-cleanup"
+    assert calls[0]["threshold_value"] == 125
+    assert calls[0]["clean_size"] == 3
+
+
+@pytest.mark.parametrize(
+    "flag, value", [
+        ("--stray-gap", "0.6"), ("--stray-gap", str(STRAY_GAP_DEFAULT)),
+        ("--clean-margin", "0.6"), ("--clean-margin", str(CLEAN_MARGIN_DEFAULT)),
+        ("--clean-size", "3"), ("--clean-size", str(CLEAN_SIZE_DEFAULT)),
+    ],
+)
+def test_cleanup_settings_require_pre_cleanup_measurement(
+    flag, value, tmp_path, monkeypatch, capsys,
+):
+    calls = []
+    _fake_core(monkeypatch, calls)
+    args = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"), "-t", "10x10cm",
+        flag, value,
+    ])
+    with pytest.raises(SystemExit):
+        _cmd_run(args)
+    assert f"{flag} requires --measure-pre-cleanup" in capsys.readouterr().err
+    assert not calls
+
+
 def test_results_unit_accepts_supported_choices():
     ns = build_parser().parse_args(["run", "-i", "x", "--results-unit", "in"])
     assert ns.results_unit == "in"
@@ -62,6 +342,39 @@ def test_results_unit_accepts_supported_choices():
 def test_invalid_choice_rejected():
     with pytest.raises(SystemExit):
         build_parser().parse_args(["run", "-i", "x", "--mask-method", "nonsense"])
+
+
+def test_threshold_level_accepts_presets_and_custom_cutoffs():
+    parse = build_parser().parse_args
+    assert parse(["run", "-i", "x", "--threshold-level", "177"]).threshold_level == 177
+    assert parse(["run", "-i", "x", "--threshold-level", "HIGH"]).threshold_level == "high"
+
+
+@pytest.mark.parametrize("value", ["0", "256", "custom", "12.5"])
+def test_threshold_level_rejects_invalid_cutoffs(value, capsys):
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["run", "-i", "x", "--threshold-level", value])
+    assert exc.value.code == 2
+    assert "--threshold-level" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("extra", [
+    [],
+    ["--mask-method", "birefnet", "--export", "pre-cleanup", "--pre-cleanup-methods", "threshold"],
+    ["--mask-method", "both"],
+])
+def test_banner_reports_custom_threshold_whenever_thresholding_runs(extra, capsys):
+    args = build_parser().parse_args(["run", "-i", "x", "--threshold-level", "177", *extra])
+    _print_run_banner(args, 177)
+    assert "Threshold level: custom (177)" in capsys.readouterr().out
+
+
+def test_banner_omits_threshold_when_birefnet_alone_segments(capsys):
+    args = build_parser().parse_args(
+        ["run", "-i", "x", "--mask-method", "birefnet", "--threshold-level", "177"]
+    )
+    _print_run_banner(args, 177)
+    assert "Threshold level" not in capsys.readouterr().out
 
 
 def test_sheet_and_legacy_dimensions_are_mutually_exclusive():
@@ -83,6 +396,17 @@ def test_legacy_template_dimensions_keep_their_historical_meaning():
     lm = SimpleNamespace(parse_template_dimensions=parse_template_dimensions)
 
     assert _resolve_template_dims(args, lm) == (10.5, 9.5, "in")
+
+
+@pytest.mark.parametrize("method", ["birefnet", "both"])
+def test_local_birefnet_preflight_runs_whenever_birefnet_measures(method, monkeypatch):
+    args = build_parser().parse_args(["run", "-i", "x", "--mask-method", method])
+    required = []
+    monkeypatch.setattr("mats.birefnet_runtime.require_birefnet_dependencies", lambda: None)
+    monkeypatch.setattr("mats.weights.require_local_weight", required.append)
+
+    _require_local_birefnet_for_run(args)
+    assert required == ["birefnet"]
 
 
 def test_local_birefnet_preflight_skips_otsu(monkeypatch):

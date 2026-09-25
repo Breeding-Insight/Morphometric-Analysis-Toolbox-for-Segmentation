@@ -129,6 +129,23 @@ Currently true, and worth knowing because users ask:
   `--input-dir`).
 - Defaults that surprise people: `--mask-method threshold`, `--threshold-level
   auto`, `--csv-schema full`, `--results-unit cm`, `--output-mode masks`.
+- `--threshold-level` takes a preset (`auto`, `low`, `medium`, `high`) or an
+  integer cutoff `1`–`255`; the GUI's **custom** level is the same thing.
+- `--mask-method both` (two checked methods in the GUI) measures each image with
+  Otsu and BiRefNet and writes one CSV and failure log per method
+  (`*_threshold.csv`, `*_birefnet.csv`); a single-method run keeps the
+  unsuffixed names and identical output.
+- `--measure-pre-cleanup` is not "every raw pixel": it clears a `--clean-margin`
+  band along the target-box edge (default 1% of the shorter side, where the
+  printed box outline lands), keeps the largest remaining object (the leaf),
+  and drops pieces that touch the band or lie beyond `--stray-gap` (default
+  `0.25` × the leaf's bounding-box diagonal) — see `mask_cleanup.clean_raw_mask`.
+  `--clean-size` (pixels, default `0` = off, pre-cleanup only) then removes
+  specks and fills holes below that inscribed radius — the app's **Clean size**,
+  via `mask_cleanup.raw_measurement_mask`; Adjust's Overwrite saves it for Otsu
+  specimens. `--clean-margin` is the edge margin, not the clean size.
+  Clean image and Remove flashfill use the same margin. `--export pre-cleanup`
+  still writes the untouched raw mask. The default cleaned path is unaffected.
 - `mats fetch-weights` with no flag fetches **RF-DETR only**; BiRefNet needs
   `--only birefnet` or `--all`. `--source {auto,hf,lfs}` picks the channel —
   `lfs` is the one to use on networks that block huggingface.co. After a
@@ -203,8 +220,8 @@ Rules that keep this repo working:
   module-level import of torch, rfdetr, or streamlit in an imported path breaks
   CI even when it works locally.
 - **`paths.py` stays import-light** — standard library only. Models load lazily
-  inside `core.py`; `samples.py`, `dimensions.py`, and `scaling.py` follow the
-  same contract.
+  inside `core.py`; `samples.py`, `dimensions.py`, `scaling.py`, and
+  `mask_settings.py` follow the same contract.
 - **The CLI and the GUI share one execution path** (`run_leaf_morpho_batch`).
   Never fork pipeline logic between them — divergence would mean the two
   interfaces report different measurements.

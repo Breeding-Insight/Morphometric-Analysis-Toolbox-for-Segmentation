@@ -125,7 +125,9 @@ you want when a batch mixes several template sizes.
 | Best for | Clean, high-contrast backgrounds (a leaf on plain white) | Cluttered or low-contrast backgrounds |
 
 Start with the default. Switch with `--mask-method birefnet` only if the masks
-disappoint you.
+disappoint you. To compare the two on your own photos, use `--mask-method both`
+(or check both methods in the app): every image is measured with each method,
+and each method gets its own results CSV.
 
 **How many workers?** `-w/--workers` applies to the threshold path. One worker
 uses CUDA/MPS when available; two or more switch to parallel CPU processing and
@@ -172,6 +174,14 @@ Full detail, checksums, and the complete resolution order: [weights.md](weights.
 **What comes out?** Per image, a perspective-corrected `{sample_id}_target_box.jpg`
 and a `{sample_id}_mask.png`, plus one measurements CSV and a
 `leaf_morpho_failures.csv` listing anything that warned or failed.
+Target-box and cleaned-mask files are optional, checked by default in the app;
+the failure log is also optional. Pre-cleanup masks, overlays, cutouts, and
+measurement axes can be requested in Setup or with CLI export flags. The
+pre-cleanup mask keeps holes and smaller objects. You may export separate Otsu
+and BiRefNet pre-cleanup masks in one run; only the measurement methods
+determine the CSV values. A BiRefNet export requires a locally available model.
+Measuring with both methods writes one results CSV and one failure log per
+method, suffixed `_threshold` and `_birefnet`.
 
 **Which columns?** `--csv-schema full` (the default) gives `sample_id`,
 `leaf_area_cm2`, `width_cm`, `length_cm`, `px_per_cm_width`, `px_per_cm_height`,
@@ -207,7 +217,7 @@ Run `mats doctor` first; it reports most of these.
 | No markers detected, on a fresh clone | Check for a Git LFS placeholder first: `ls -l weights/rf_detr_marker.pth` should be ~134 MB. If it's ~134 bytes, run `git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"` |
 | "QR code not read" | Pass the size yourself: `--sheet-dimensions 12x12in`. To add decoders: `pip install -e ".[qr]"` (plus the native `zbar` for pyzbar) |
 | No markers detected | Get all four markers in frame; print at 100 % scale in the template's marker colour |
-| Masks include the background | Try `--threshold-level low/medium/high`, or `--mask-method birefnet` |
+| Masks include the background | Try `--threshold-level low/medium/high` or a custom cutoff such as `--threshold-level 140`, or `--mask-method birefnet` |
 | CUDA out of memory | Only with BiRefNet — process fewer images at a time, or use the default `threshold` |
 | Very slow run | Use `threshold` and raise `-w/--workers` |
 | Blank page in Open OnDemand | Reverse-proxy `baseUrlPath` mismatch — see [deploy/ondemand/mats/README.md](../deploy/ondemand/mats/README.md) |

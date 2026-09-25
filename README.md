@@ -236,10 +236,14 @@ Common options (full reference in [docs/cli.md](docs/cli.md)):
 | `-r, --results_path` | Measurement CSV path | `./leaf_morpho_results.csv` |
 | `--sheet-dimensions` | Finished Template Creator sheet size, `<w>x<h><unit>` | read from QR |
 | `-t, --template_dimensions` | Legacy/custom marker-centre calibration area | unused |
-| `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast) | `threshold` |
-| `--threshold-level` | `auto` (Otsu) / `low` / `medium` / `high` | `auto` |
+| `--mask-method` | `birefnet` (accurate, GPU), `threshold` (fast), or `both` | `threshold` |
+| `--threshold-level` | `auto` (Otsu) / `low` / `medium` / `high`, or a custom cutoff `1`–`255` | `auto` |
 | `--csv-schema` | `full` (area/width/length + per-axis pixels-per-selected-unit) or `compact` | `full` |
 | `--results-unit` | Measurement-output unit: `mm`, `cm`, or `in` | `cm` |
+| `--measure-pre-cleanup` | Measure from raw binary masks before cleanup, minus the edge margin and stray pieces | off |
+| `--clean-margin` | With `--measure-pre-cleanup`: band cleared along the target-box edge, as a percent of its shorter side | `1` |
+| `--stray-gap` | With `--measure-pre-cleanup`: how far a piece may lie from the leaf, as a fraction of its bounding-box diagonal | `0.25` |
+| `--clean-size` | With `--measure-pre-cleanup`: remove specks and fill enclosed holes smaller than this radius in pixels (the app's **Clean size**) | `0` (off) |
 | `-w, --workers` | Parallel workers (threshold path only) | auto |
 | `--save-axes` | Also save length/width overlay images for QC | off |
 
@@ -248,7 +252,9 @@ no GPU, no extra download, and good for clean, high-contrast backgrounds where
 a leaf sits on plain white. `birefnet` is more accurate on cluttered or
 low-contrast backgrounds and uses a GPU when available (CPU works but is
 slow), at the cost of the ~2.65 GB checkpoint — fetch it once with
-`mats fetch-weights --only birefnet`.
+`mats fetch-weights --only birefnet`. To compare them, `--mask-method both`
+(or checking both methods in the app) measures every image with each method
+and writes one results CSV per method.
 
 ---
 
@@ -258,6 +264,29 @@ Per image, in the output folder:
 
 - `{sample_id}_target_box.jpg` — the perspective-corrected observation box
 - `{sample_id}_mask.png` — the leaf segmentation mask
+
+Both image exports are on by default and can be disabled with `--no-target-boxes`
+or `--no-masks`. Pre-cropped target-box inputs are not copied. Optional
+`--export pre-cleanup` saves each measurement method's binary mask before cleanup;
+`--pre-cleanup-methods both` runs Otsu/threshold and BiRefNet and saves their
+pre-cleanup masks separately. Only a `--mask-method` method determines
+measurements. BiRefNet exports require its checkpoint to be installed locally.
+With `--mask-method both`, each method's masks and QC images end in
+`_threshold` or `_birefnet` (for example `{sample_id}_mask_birefnet.png`).
+`--export overlay`, `--export cutout`, and `--export axes` add QC images; repeat
+the flag to request multiple kinds. The app offers the same choices in Setup.
+Use `--measure-pre-cleanup` (or **Measure from pre-cleanup masks** in the app)
+to calculate measurements from the raw binary segmentation. A thin band along
+the target-box edge, where the template's printed box outline lands, is cleared
+first (`--clean-margin`). The largest remaining object is taken as the leaf;
+other pieces that touch that band, or lie farther from the leaf than
+`--stray-gap` times its bounding-box diagonal, are dropped. Area counts the remaining foreground pixels, and width and length span
+their extent, so specks near the leaf can still affect the result; `--clean-size`
+(for example `--clean-size 3`) removes specks and fills enclosed holes whose
+inscribed radius is below that many pixels, without flash-filling the leaf. This choice
+is independent of `--export pre-cleanup`, which saves the mask with every piece.
+Each results CSV has a `.meta.json` companion that records the measurement source
+and, for pre-cleanup runs, these settings.
 
 Plus a measurements CSV. Choose `mm`, `cm` (the default), or `in` with
 `--results-unit` in the CLI or the **Result units** control in the app. The
@@ -280,7 +309,11 @@ it does not change calibration math. Two schemas:
   millimeters or inches selected, `cm` is replaced consistently in the
   measurement column names.
 
-A `leaf_morpho_failures.csv` records per-image warnings and failures.
+A `leaf_morpho_failures.csv` records per-image warnings and failures. With
+`--mask-method both` (or both methods checked in the app), each method writes its
+own results CSV and failure log with a method suffix, for example
+`leaf_morpho_results_birefnet.csv` and `leaf_morpho_failures_birefnet.csv`, in
+the same schema as a single-method run.
 
 > **Migration note:** earlier versions reported three isotropic scale
 > conventions (`*_meanscale`, `*_widthscale`, `*_heightscale`). Old CSVs remain

@@ -23,6 +23,21 @@ def _result_for(path):
     }, None
 
 
+@pytest.mark.parametrize("input_images", [
+    ["Sample.jpg", "sample.png"],
+    ["Sample_target_box.jpg", "sample.png"],
+])
+def test_batch_rejects_case_insensitive_sample_id_collisions(input_images, tmp_path):
+    output_dir = tmp_path / "out"
+    with pytest.raises(ValueError, match="duplicate sample IDs"):
+        core.run_leaf_morpho_batch(
+            input_images,
+            str(output_dir),
+            str(output_dir / "results.csv"),
+        )
+    assert not output_dir.exists()
+
+
 def test_parallel_cpu_policy_allows_model_backed_workers(monkeypatch, tmp_path):
     seen_devices = []
 
