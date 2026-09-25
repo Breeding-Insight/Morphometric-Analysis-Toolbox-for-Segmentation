@@ -67,12 +67,15 @@ from .scaling import (
 # validate them without importing torch. Re-exported for `core.THRESHOLD_LEVELS`.
 from .thresholds import THRESHOLD_LEVELS
 
-# Pre-cleanup measurements drop pieces touching the border or far from the leaf.
-from .mask_cleanup import clean_raw_mask, clear_margin
+# Pre-cleanup measurements drop pieces touching the border or far from the leaf,
+# then, at a clean size above 0, small specks and holes.
+from .mask_cleanup import clear_margin, raw_measurement_mask
 from .mask_settings import (
     CLEAN_MARGIN_DEFAULT,
+    CLEAN_SIZE_DEFAULT,
     STRAY_GAP_DEFAULT,
     checked_clean_margin,
+    checked_clean_size,
     checked_stray_gap,
 )
 
@@ -900,6 +903,7 @@ def leaf_morpho(
     measurement_source="cleaned",
     stray_gap=STRAY_GAP_DEFAULT,
     clean_margin=CLEAN_MARGIN_DEFAULT,
+    clean_size=CLEAN_SIZE_DEFAULT,
 ):
     if measurement_source not in ("cleaned", "pre-cleanup"):
         raise ValueError("measurement_source must be 'cleaned' or 'pre-cleanup'")
@@ -907,6 +911,7 @@ def leaf_morpho(
         raise ValueError("pre-cleanup measurements require output_mode='masks'")
     stray_gap = checked_stray_gap(stray_gap)
     clean_margin = checked_clean_margin(clean_margin)
+    clean_size = _checked_run_clean_size(clean_size, measurement_source)
     if execution_device not in {"auto", "cpu", "hybrid"}:
         raise ValueError("execution_device must be 'auto', 'cpu', or 'hybrid'")
     device_override = "cpu" if execution_device == "cpu" else None
@@ -990,9 +995,10 @@ def leaf_morpho(
             if not measured:
                 continue
             # The pre-cleanup export above stays the literal raw mask; the
-            # measurement clears the edge margin and drops stray pieces.
+            # measurement clears the edge margin, drops stray pieces, and at a
+            # clean size above 0 removes small specks and fills small holes.
             measurement_mask = (
-                clean_raw_mask(raw, clean_margin, stray_gap)
+                raw_measurement_mask(raw, clean_margin, stray_gap, clean_size)
                 if measurement_source == "pre-cleanup" else cleaned
             )
             segmented[method] = (measurement_mask, None, method_warnings)
@@ -1308,8 +1314,17 @@ def _process_batch_image(
         measurement_source=export_options.get("measurement_source", "cleaned"),
         stray_gap=export_options.get("stray_gap", STRAY_GAP_DEFAULT),
         clean_margin=export_options.get("clean_margin", CLEAN_MARGIN_DEFAULT),
+        clean_size=export_options.get("clean_size", CLEAN_SIZE_DEFAULT),
     )
     return input_image, result, None
+
+
+def _checked_run_clean_size(clean_size, measurement_source):
+    """Validate a run's clean size; above 0 it needs pre-cleanup measurements."""
+    clean_size = checked_clean_size(clean_size)
+    if clean_size and measurement_source != "pre-cleanup":
+        raise ValueError("clean_size requires measurement_source='pre-cleanup'")
+    return clean_size
 
 
 def run_leaf_morpho_batch(
@@ -1336,6 +1351,7 @@ def run_leaf_morpho_batch(
     measurement_source="cleaned",
     stray_gap=STRAY_GAP_DEFAULT,
     clean_margin=CLEAN_MARGIN_DEFAULT,
+    clean_size=CLEAN_SIZE_DEFAULT,
 ):
     """Run the leaf morphometrics pipeline with per-image error isolation.
 
@@ -1357,13 +1373,17 @@ def run_leaf_morpho_batch(
     ``measurement_source='pre-cleanup'`` measures each method's raw mask after
     clearing a ``clean_margin`` percent band along the target-box edge and
     dropping pieces that touch that band or lie more than ``stray_gap`` times the
-    leaf's bounding-box diagonal from it (``mask_cleanup.clean_raw_mask``).
+    leaf's bounding-box diagonal from it (``mask_cleanup.clean_raw_mask``). A
+    ``clean_size`` above 0 (pre-cleanup only) then removes white specks and fills
+    enclosed holes whose inscribed radius is below that many pixels
+    (``mask_cleanup.raw_measurement_mask``).
     """
     input_images = list(input_images or [])
     if measurement_source not in ("cleaned", "pre-cleanup"):
         raise ValueError("measurement_source must be 'cleaned' or 'pre-cleanup'")
     stray_gap = checked_stray_gap(stray_gap)
     clean_margin = checked_clean_margin(clean_margin)
+    clean_size = _checked_run_clean_size(clean_size, measurement_source)
     methods = resolve_mask_methods(mask_method)
     if output_mode != "masks" and measurement_source == "pre-cleanup":
         raise ValueError("pre-cleanup measurements require output_mode='masks'")
@@ -1375,6 +1395,7 @@ def run_leaf_morpho_batch(
     options["measurement_source"] = measurement_source
     options["stray_gap"] = stray_gap
     options["clean_margin"] = clean_margin
+    options["clean_size"] = clean_size
     if options.get("preview_dir"):
         os.makedirs(options["preview_dir"], exist_ok=True)
     pre_cleanup = tuple(dict.fromkeys(options.get("pre_cleanup_methods", ())))
@@ -1591,6 +1612,7 @@ def run_leaf_morpho_batch(
             if measurement_source == "pre-cleanup":
                 metadata["clean_margin"] = clean_margin
                 metadata["stray_gap"] = stray_gap
+                metadata["clean_size"] = clean_size
             with open(metadata_path, "w", encoding="utf-8") as metadata_file:
                 json.dump(metadata, metadata_file, indent=2)
                 metadata_file.write("\n")
@@ -1637,6 +1659,7 @@ def run_leaf_morpho_batch(
         "measurement_source": measurement_source,
         "clean_margin": clean_margin,
         "stray_gap": stray_gap,
+        "clean_size": clean_size,
         "qr_backend_fields": qr_backend_fields,
         "workers": workers,
         "worker_reason": worker_reason,

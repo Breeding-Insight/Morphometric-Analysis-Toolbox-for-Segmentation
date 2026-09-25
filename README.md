@@ -243,6 +243,7 @@ Common options (full reference in [docs/cli.md](docs/cli.md)):
 | `--measure-pre-cleanup` | Measure from raw binary masks before cleanup, minus the edge margin and stray pieces | off |
 | `--clean-margin` | With `--measure-pre-cleanup`: band cleared along the target-box edge, as a percent of its shorter side | `1` |
 | `--stray-gap` | With `--measure-pre-cleanup`: how far a piece may lie from the leaf, as a fraction of its bounding-box diagonal | `0.25` |
+| `--clean-size` | With `--measure-pre-cleanup`: remove specks and fill enclosed holes smaller than this radius in pixels (the app's **Clean size**) | `0` (off) |
 | `-w, --workers` | Parallel workers (threshold path only) | auto |
 | `--save-axes` | Also save length/width overlay images for QC | off |
 
@@ -280,9 +281,12 @@ the target-box edge, where the template's printed box outline lands, is cleared
 first (`--clean-margin`). The largest remaining object is taken as the leaf;
 other pieces that touch that band, or lie farther from the leaf than
 `--stray-gap` times its bounding-box diagonal, are dropped. Area counts the remaining foreground pixels, and width and length span
-their extent, so specks near the leaf can still affect the result. This choice
+their extent, so specks near the leaf can still affect the result; `--clean-size`
+(for example `--clean-size 3`) removes specks and fills enclosed holes whose
+inscribed radius is below that many pixels, without flash-filling the leaf. This choice
 is independent of `--export pre-cleanup`, which saves the mask with every piece.
-Each results CSV has a `.meta.json` companion that records the measurement source.
+Each results CSV has a `.meta.json` companion that records the measurement source
+and, for pre-cleanup runs, these settings.
 
 Plus a measurements CSV. Choose `mm`, `cm` (the default), or `in` with
 `--results-unit` in the CLI or the **Result units** control in the app. The

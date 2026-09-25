@@ -17,7 +17,7 @@ from mats.cli import (
     build_parser,
 )
 from mats.dimensions import parse_template_dimensions
-from mats.mask_settings import CLEAN_MARGIN_DEFAULT, STRAY_GAP_DEFAULT
+from mats.mask_settings import CLEAN_MARGIN_DEFAULT, CLEAN_SIZE_DEFAULT, STRAY_GAP_DEFAULT
 
 
 def test_default_subcommand_inserted():
@@ -128,6 +128,31 @@ def test_clean_margin_rejects_invalid_values(value, capsys):
     assert "--clean-margin" in capsys.readouterr().err
 
 
+def test_clean_size_defaults_and_parses():
+    parse = build_parser().parse_args
+    assert parse(["run", "-i", "x"]).clean_size == CLEAN_SIZE_DEFAULT == 0
+    assert parse(["run", "-i", "x", "--measure-pre-cleanup", "--clean-size", "3"]).clean_size == 3
+    assert parse(["run", "-i", "x", "--clean-size", "50"]).clean_size == 50
+
+
+@pytest.mark.parametrize("value", ["-1", "51", "2.5", "big"])
+def test_clean_size_rejects_invalid_values(value, capsys):
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["run", "-i", "x", "--clean-size", value])
+    assert exc.value.code == 2
+    assert "--clean-size" in capsys.readouterr().err
+
+
+def test_banner_reports_clean_size_for_pre_cleanup(capsys):
+    parse = build_parser().parse_args
+    _print_run_banner(parse(["run", "-i", "x", "--measure-pre-cleanup", "--clean-size", "3"]), None)
+    assert "Clean size: 3 px" in capsys.readouterr().out
+    _print_run_banner(parse(["run", "-i", "x", "--measure-pre-cleanup"]), None)
+    assert "Clean size: off" in capsys.readouterr().out
+    _print_run_banner(parse(["run", "-i", "x"]), None)
+    assert "Clean size" not in capsys.readouterr().out
+
+
 def test_banner_reports_margin_and_stray_gap_only_for_pre_cleanup(capsys):
     parse = build_parser().parse_args
     _print_run_banner(parse([
@@ -174,15 +199,33 @@ def test_stray_gap_reaches_the_pipeline(tmp_path, monkeypatch):
     assert calls[0]["measurement_source"] == "pre-cleanup"
     assert calls[0]["stray_gap"] == 0.6
     assert calls[0]["clean_margin"] == 2.0
+    assert calls[0]["clean_size"] == CLEAN_SIZE_DEFAULT
 
 
-@pytest.mark.parametrize("flag", ["--stray-gap", "--clean-margin"])
-def test_cleanup_settings_require_pre_cleanup_measurement(flag, tmp_path, monkeypatch, capsys):
+def test_clean_size_reaches_the_pipeline(tmp_path, monkeypatch):
     calls = []
     _fake_core(monkeypatch, calls)
     args = build_parser().parse_args([
         "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"), "-t", "10x10cm",
-        flag, "0.6",
+        "--measure-pre-cleanup", "--threshold-level", "medium", "--clean-size", "3",
+    ])
+    assert _cmd_run(args) == 0
+    assert calls[0]["measurement_source"] == "pre-cleanup"
+    assert calls[0]["threshold_value"] == 125
+    assert calls[0]["clean_size"] == 3
+
+
+@pytest.mark.parametrize(
+    "flag, value", [("--stray-gap", "0.6"), ("--clean-margin", "0.6"), ("--clean-size", "3")],
+)
+def test_cleanup_settings_require_pre_cleanup_measurement(
+    flag, value, tmp_path, monkeypatch, capsys,
+):
+    calls = []
+    _fake_core(monkeypatch, calls)
+    args = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"), "-t", "10x10cm",
+        flag, value,
     ])
     with pytest.raises(SystemExit):
         _cmd_run(args)

@@ -8,10 +8,10 @@ piece that touches the cleared margin or lies far from the leaf
 (:func:`drop_stray_pieces`). Pre-cleanup measurements use it on every image, and
 the Clean image preview applies it before anything else.
 
-Clean image -- a clean size above 0 in the Analyze explorer, an alternative to
-:func:`mats.core.clean_leaf_mask` for the preview -- then drops small white
-specks and fills small black holes: only pieces smaller than the chosen radius
-change, and the leaf is always kept.
+Clean image -- a clean size above 0, an alternative to
+:func:`mats.core.clean_leaf_mask` -- then drops small white specks and fills small
+black holes: only pieces smaller than the chosen radius change, and the leaf is
+always kept.
 
 Sizes are distance-transform inscribed radii, measured once on the input mask.
 :func:`clean_levels` encodes them per pixel, so choosing a radius is a per-pixel
@@ -21,9 +21,11 @@ live slider shows exactly what :func:`clean_specks_and_holes` returns.
 Imports numpy and OpenCV only -- never torch -- so the offline tests can import it
 without :mod:`mats.core`.
 
-The size cleanup is preview-only today. If saving it is added, measure the cleaned
-mask under the run's measurement source (the leaf's bounding box for cleaned runs,
-the extent of all white pixels for pre-cleanup runs), as the rest of the CSV was.
+:func:`raw_measurement_mask` is the one entry point for a saved mask: a
+pre-cleanup run (``--clean-size``) measures it, and an Adjust overwrite saves it.
+Either way the mask is measured under the run's measurement source (the leaf's
+bounding box for cleaned runs, the extent of all white pixels for pre-cleanup
+runs), so every row of a CSV follows the same rule.
 """
 
 import math
@@ -33,14 +35,17 @@ import numpy as np
 
 from .mask_settings import (
     CLEAN_MARGIN_DEFAULT,
+    CLEAN_SIZE_DEFAULT,
+    CLEAN_SIZE_MAX,
     STRAY_GAP_DEFAULT,
     checked_clean_margin,
+    checked_clean_size,
     checked_stray_gap,
 )
 
-# 0 means Clean image is off: the preview shows the run's usual mask.
-CLEAN_RADIUS_DEFAULT = 0
-CLEAN_RADIUS_MAX = 50
+# The preview's names for the clean size; 0 means Clean image is off.
+CLEAN_RADIUS_DEFAULT = CLEAN_SIZE_DEFAULT
+CLEAN_RADIUS_MAX = CLEAN_SIZE_MAX
 
 # Level channels. A pixel is foreground at radius r when
 #   r < KEEP_BELOW  or  FILL_FROM <= r <= FILL_UNTIL.
@@ -237,3 +242,17 @@ def apply_clean_levels(levels, radius):
 def clean_specks_and_holes(mask, radius, max_gap=STRAY_GAP_DEFAULT, margin=CLEAN_MARGIN_DEFAULT):
     """Clear the margin and stray pieces, then specks and holes below ``radius`` px."""
     return apply_clean_levels(clean_levels(mask, max_gap, margin), radius)
+
+
+def raw_measurement_mask(mask, margin=CLEAN_MARGIN_DEFAULT, max_gap=STRAY_GAP_DEFAULT,
+                         clean_size=CLEAN_SIZE_DEFAULT):
+    """The mask measured without flash fill, at a clean size.
+
+    A ``clean_size`` of 0 is :func:`clean_raw_mask`. Above 0 it is Clean image,
+    :func:`clean_specks_and_holes` at that radius -- the mask the clean-size
+    slider previews.
+    """
+    clean_size = checked_clean_size(clean_size)
+    if clean_size:
+        return clean_specks_and_holes(mask, clean_size, max_gap, margin)
+    return clean_raw_mask(mask, margin, max_gap)

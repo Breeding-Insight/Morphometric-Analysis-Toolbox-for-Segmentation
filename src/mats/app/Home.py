@@ -26,6 +26,8 @@ from mats.scaling import DEFAULT_RESULTS_UNIT, QR_TRACE_FIELDNAMES, RESULT_UNITS
 from mats.mask_settings import (
     CLEAN_MARGIN_DEFAULT,
     CLEAN_MARGIN_MAX,
+    CLEAN_SIZE_DEFAULT,
+    CLEAN_SIZE_MAX,
     STRAY_GAP_DEFAULT,
     STRAY_GAP_MAX,
 )
@@ -71,6 +73,7 @@ RESULTS_UNIT_KEY = "results_unit"
 MEASURE_PRE_CLEANUP_KEY = "measure_pre_cleanup"
 STRAY_GAP_KEY = "stray_gap"
 CLEAN_MARGIN_KEY = "clean_margin"
+CLEAN_SIZE_KEY = "clean_size"
 WRITE_FAILURES_KEY = "write_failures"
 EXPORT_TARGET_BOXES_KEY = "export_target_boxes"
 EXPORT_MASKS_KEY = "export_cleaned_masks"
@@ -1087,10 +1090,10 @@ def render_analysis_settings(lm):
             persist_state="page",
         )
         st.caption(
-            "Pre-cleanup cleanup for this run. Each specimen's explorer can adjust both "
-            "for its clean-size, Remove flashfill, and pre-cleanup previews."
+            "Pre-cleanup settings for this run. Each specimen's explorer in Adjust can "
+            "change them for its own preview and, for Classic thresholding, overwrite."
         )
-        margin_column, gap_column = st.columns(2)
+        margin_column, gap_column, size_column = st.columns(3)
         with margin_column:
             st.number_input(
                 "Edge margin (% of box)",
@@ -1121,6 +1124,22 @@ def render_analysis_settings(lm):
                     "Pieces farther from the leaf than this fraction of its "
                     "bounding-box diagonal are dropped; 0 keeps only the leaf. Raise "
                     "it when a leaf's parts lie apart, such as separated leaflets."
+                ),
+                persist_state="page",
+            )
+        with size_column:
+            st.number_input(
+                "Clean size (px)",
+                min_value=0,
+                max_value=CLEAN_SIZE_MAX,
+                step=1,
+                key=CLEAN_SIZE_KEY,
+                disabled=not measure_pre_cleanup,
+                help=(
+                    "After the edge margin and stray pieces are cleared, removes white "
+                    "specks and fills enclosed holes whose inscribed radius is below "
+                    "this many pixels. The leaf is always kept and nothing is "
+                    "flash-filled; 0 turns it off."
                 ),
                 persist_state="page",
             )
@@ -1223,6 +1242,12 @@ def current_analysis_config(lm):
         ),
         "stray_gap": float(st.session_state[STRAY_GAP_KEY]),
         "clean_margin": float(st.session_state[CLEAN_MARGIN_KEY]),
+        # The clean size shapes only pre-cleanup measurements; the pipeline
+        # rejects it otherwise, so a grayed-out value never reaches a run.
+        "clean_size": (
+            int(st.session_state[CLEAN_SIZE_KEY])
+            if st.session_state[MEASURE_PRE_CLEANUP_KEY] else CLEAN_SIZE_DEFAULT
+        ),
         "write_failures": st.session_state[WRITE_FAILURES_KEY],
         "export_options": {
             "target_boxes": st.session_state[EXPORT_TARGET_BOXES_KEY],
@@ -1750,6 +1775,7 @@ def execute_leaf_analysis(
                     measurement_source=config["measurement_source"],
                     stray_gap=config["stray_gap"],
                     clean_margin=config["clean_margin"],
+                    clean_size=config["clean_size"],
                 )
         except ValueError as exc:
             preview_cache.cleanup()
@@ -1805,6 +1831,7 @@ def main():
     st.session_state.setdefault(MEASURE_PRE_CLEANUP_KEY, False)
     st.session_state.setdefault(STRAY_GAP_KEY, STRAY_GAP_DEFAULT)
     st.session_state.setdefault(CLEAN_MARGIN_KEY, CLEAN_MARGIN_DEFAULT)
+    st.session_state.setdefault(CLEAN_SIZE_KEY, CLEAN_SIZE_DEFAULT)
     st.session_state.setdefault(WRITE_FAILURES_KEY, True)
     for key, default in ((EXPORT_TARGET_BOXES_KEY, True), (EXPORT_MASKS_KEY, True),
                          (EXPORT_PRE_CLEANUP_KEY, False),
@@ -1937,6 +1964,7 @@ def main():
                         "measurement_source": summary["measurement_source"],
                         "stray_gap": summary["stray_gap"],
                         "clean_margin": summary["clean_margin"],
+                        "clean_size": summary["clean_size"],
                         "threshold_value": config["threshold_value"],
                         "scale_axes_by_sample": _scale_axes_by_sample(summary),
                         "artifacts": summary["artifacts"],
@@ -2457,23 +2485,25 @@ def _record_clean_radius(component_key, state_key):
 
 
 CLEAN_SIZE_HELP = (
-    "0 shows the run's usual mask. Above 0, Clean image replaces MATS cleanup in "
-    "this preview: the edge margin is cleared, pieces touching it or far from the "
-    "leaf are removed, and white specks and enclosed black holes with an inscribed "
-    "radius below the clean size (px) are removed or filled. The leaf is always "
-    "kept and nothing is flash-filled. Preview only; set it back to 0 to overwrite."
+    "0 turns Clean image off. Above 0, Clean image replaces MATS cleanup: the edge "
+    "margin is cleared, pieces touching it or far from the leaf are removed, and "
+    "white specks and enclosed black holes with an inscribed radius below the "
+    "clean size (px) are removed or filled. The leaf is always kept and nothing is "
+    "flash-filled."
 )
+CLEAN_SIZE_SAVE_HELP = CLEAN_SIZE_HELP + " Overwrite saves and measures the mask shown."
+CLEAN_SIZE_PREVIEW_HELP = CLEAN_SIZE_HELP + " BiRefNet specimens preview it only."
 CLEAN_SIZE_ON_CAPTION = (
     "Clean size is above 0, so this preview shows Clean image instead of MATS cleanup."
 )
 
 
-def _clean_radius(state_key):
-    """The clean size remembered for this specimen; 0 means Clean image is off."""
-    from mats.mask_cleanup import CLEAN_RADIUS_DEFAULT
-
+def _clean_radius(run, method, sample_id):
+    """This specimen's clean size: slider edits, else saved, else the run's; 0 is off."""
+    saved = run.get("threshold_adjustments", {}).get(sample_id, {}) if method == "threshold" else {}
+    state_key = f"{run.get('run_id', '')}:{method}:{sample_id}"
     return st.session_state.setdefault("clean_preview_radii", {}).get(
-        state_key, CLEAN_RADIUS_DEFAULT
+        state_key, saved.get("clean_size", run.get("clean_size", CLEAN_SIZE_DEFAULT))
     )
 
 
@@ -2610,11 +2640,11 @@ def render_threshold_explorer(pair, run, *, marked_pairs=None):
     remove_fill = _remove_fill(run, clean_key)
 
     st.markdown("**Explore and adjust output**")
-    clean_radius = _clean_radius(clean_key)
+    clean_radius = _clean_radius(run, "threshold", pair["sample_id"])
     clean_on = clean_radius > 0
     if clean_on:
         st.caption(
-            CLEAN_SIZE_ON_CAPTION + " Set it back to 0 to overwrite."
+            CLEAN_SIZE_ON_CAPTION + " Overwrite saves it."
             + (" Remove flashfill doesn't apply while it is above 0." if remove_fill else "")
         )
     elif run.get("measurement_source") == "cleaned":
@@ -2661,7 +2691,7 @@ def render_threshold_explorer(pair, run, *, marked_pairs=None):
         clean_levels_image=clean_levels_image,
         clean_cutoff=cutoff,
         clean_radius=clean_radius,
-        clean_help=CLEAN_SIZE_HELP,
+        clean_help=CLEAN_SIZE_SAVE_HELP,
         fill_toggle=True,
         fill_note=_remove_fill_note(run),
         live_margin=margin if flash_fill_off else 0,
@@ -2696,15 +2726,14 @@ def render_threshold_explorer(pair, run, *, marked_pairs=None):
         "Saving replaces the selected mask, CSV measurements, and any saved "
         "overlays, cutouts, and measurement axes."
     )
-    unsavable = clean_on or not THRESHOLD_MIN <= cutoff <= THRESHOLD_MAX
-    clean_help = "Clean image is preview-only; set the clean size to 0 to overwrite."
+    unsavable = not THRESHOLD_MIN <= cutoff <= THRESHOLD_MAX
     overwrite_this = st.button(
         "Overwrite this specimen",
         key=f"apply_adjustment_{state_key}",
         type="primary",
         icon=":material/save:",
         disabled=unsavable,
-        help=clean_help if clean_on else "Saves these settings to the specimen selected in View.",
+        help="Saves these settings, including the clean size, to the specimen selected in View.",
         width="stretch",
     )
     overwrite_marked = st.button(
@@ -2712,9 +2741,9 @@ def render_threshold_explorer(pair, run, *, marked_pairs=None):
         key=f"apply_marked_adjustment_{state_key}",
         icon=":material/done_all:",
         disabled=unsavable or not marked_pairs,
-        help=clean_help if clean_on else (
-            "Saves these settings to every specimen checked in Marked; each keeps "
-            "its own calibration."
+        help=(
+            "Saves these settings, including the clean size, to every specimen "
+            "checked in Marked; each keeps its own calibration."
         ),
         width="stretch",
     )
@@ -2729,12 +2758,12 @@ def render_threshold_explorer(pair, run, *, marked_pairs=None):
             if bulk:
                 apply_threshold_adjustments(
                     run, marked_pairs, int(cutoff), remove_fill=remove_fill,
-                    clean_margin=margin, stray_gap=gap,
+                    clean_margin=margin, stray_gap=gap, clean_size=clean_radius,
                 )
             else:
                 apply_threshold_adjustment(
                     run, pair, int(cutoff), remove_fill=remove_fill,
-                    clean_margin=margin, stray_gap=gap,
+                    clean_margin=margin, stray_gap=gap, clean_size=clean_radius,
                 )
         except (OSError, ValueError) as exc:
             st.error(f"Could not save adjustments: {exc}")
@@ -2742,7 +2771,8 @@ def render_threshold_explorer(pair, run, *, marked_pairs=None):
             read_results_dataframe.clear()
             _clear_export_zip_cache()
             st.session_state[notice_key] = (
-                f"Updated {count} specimen(s) at threshold {int(cutoff)}."
+                f"Updated {count} specimen(s) at threshold {int(cutoff)}"
+                + (f", clean size {clean_radius} px." if clean_on else ".")
             )
             st.rerun()
 
@@ -2760,7 +2790,7 @@ def render_mask_explorer(pair, run, method):
     remove_fill = _remove_fill(run, state_key)
     pre_cleanup = run.get("measurement_source") == "pre-cleanup"
     st.markdown("**Explore and adjust output**")
-    clean_radius = _clean_radius(state_key)
+    clean_radius = _clean_radius(run, method, pair["sample_id"])
     clean_on = clean_radius > 0
     if clean_on:
         st.caption(CLEAN_SIZE_ON_CAPTION + " Nothing is saved.")
@@ -2819,7 +2849,7 @@ def render_mask_explorer(pair, run, method):
         color_image=color_image,
         clean_levels_image=clean_levels_image,
         clean_radius=clean_radius,
-        clean_help=CLEAN_SIZE_HELP,
+        clean_help=CLEAN_SIZE_PREVIEW_HELP,
         remove_fill=remove_fill,
         fill_toggle=True,
         fill_note=_remove_fill_note(run),

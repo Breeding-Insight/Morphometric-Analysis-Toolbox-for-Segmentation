@@ -11,7 +11,7 @@ from pathlib import Path
 
 import cv2
 
-from mats.mask_cleanup import clean_raw_mask
+from mats.mask_cleanup import raw_measurement_mask
 from mats.scaling import (
     NA_VALUE,
     compact_measurement_row,
@@ -22,8 +22,10 @@ from mats.scaling import (
 )
 from mats.mask_settings import (
     CLEAN_MARGIN_DEFAULT,
+    CLEAN_SIZE_DEFAULT,
     STRAY_GAP_DEFAULT,
     checked_clean_margin,
+    checked_clean_size,
     checked_stray_gap,
 )
 
@@ -77,11 +79,15 @@ def _scale_axes(run, sample_id, csv_row, unit):
 
 def measure_threshold_adjustment(
     run, pair, cutoff, *, remove_fill=False, clean_margin=None, stray_gap=None,
+    clean_size=None,
 ):
     """Compute the exact saved-mask measurement for one selected specimen.
 
-    ``clean_margin`` and ``stray_gap`` default to the run's values; they apply to
-    pre-cleanup runs and, for the margin only, to Remove flashfill.
+    ``clean_margin``, ``stray_gap``, and ``clean_size`` default to the run's
+    values. The margin and gap apply to pre-cleanup runs and a clean size above
+    0, and the margin also to Remove flashfill. A clean size above 0 measures
+    Clean image, the mask its preview shows; in a cleaned run it also replaces
+    MATS cleanup, and Remove flashfill, in the saved mask.
     """
     from mats import core
 
@@ -111,12 +117,22 @@ def measure_threshold_adjustment(
     gap = checked_stray_gap(
         run.get("stray_gap", STRAY_GAP_DEFAULT) if stray_gap is None else stray_gap
     )
-    raw = core.threshold_mask(target, cutoff)
-    cleaned = (
-        core.unfilled_leaf_mask(raw, margin) if remove_fill
-        else core.clean_leaf_mask(raw.copy())
+    size = checked_clean_size(
+        run.get("clean_size", CLEAN_SIZE_DEFAULT) if clean_size is None else clean_size
     )
-    measurement_mask = clean_raw_mask(raw, margin, gap) if source == "pre-cleanup" else cleaned
+    pre_cleanup = source == "pre-cleanup"
+    raw = core.threshold_mask(target, cutoff)
+    unfilled = raw_measurement_mask(raw, margin, gap, size) if pre_cleanup or size else None
+    # A pre-cleanup run keeps its cleaned-mask export and measures the unfilled
+    # mask; a cleaned run saves and measures one mask, Clean image when on.
+    fill_holes = not remove_fill and (pre_cleanup or not size)
+    if size and not pre_cleanup:
+        cleaned = unfilled
+    elif remove_fill:
+        cleaned = core.unfilled_leaf_mask(raw, margin)
+    else:
+        cleaned = core.clean_leaf_mask(raw.copy())
+    measurement_mask = unfilled if pre_cleanup else cleaned
     measurement = core.measurement_row_from_mask(
         sample_id, measurement_mask, *axes, measurement_source=source
     )
@@ -141,6 +157,8 @@ def measure_threshold_adjustment(
         "converted": converted,
         "clean_margin": margin,
         "stray_gap": gap,
+        "clean_size": size,
+        "fill_holes": fill_holes,
     }
 
 
@@ -193,13 +211,14 @@ def _commit_files(changes):
 
 def apply_threshold_adjustment(
     run, pair, cutoff, *, remove_fill=False, clean_margin=None, stray_gap=None,
+    clean_size=None,
 ):
     """Overwrite only this threshold specimen's measurements and dependent images."""
     from mats import core
 
     prepared = measure_threshold_adjustment(
         run, pair, cutoff, remove_fill=remove_fill,
-        clean_margin=clean_margin, stray_gap=stray_gap,
+        clean_margin=clean_margin, stray_gap=stray_gap, clean_size=clean_size,
     )
     sample_id = prepared["sample_id"]
     output_dir = Path(run["output_path"])
@@ -227,8 +246,9 @@ def apply_threshold_adjustment(
     if pair.get("raw_mask"):
         preview_raw_path = Path(pair["raw_mask"])
         changes[preview_raw_path] = _encoded_image(preview_raw_path, prepared["raw"])
-    # A pre-cleanup run measured its raw mask minus stray pieces; the preview
-    # mask holds that, while the pre-cleanup export stays the raw mask.
+    # A pre-cleanup run measured its raw mask minus stray pieces (and, at a clean
+    # size, small specks and holes); the preview mask holds that, while the
+    # pre-cleanup export stays the raw mask.
     measured_path = None
     if pre_cleanup and pair.get("mask") and Path(pair["mask"]) != raw_path:
         measured_path = Path(pair["mask"])
@@ -285,12 +305,15 @@ def apply_threshold_adjustment(
         if pre_cleanup:
             metadata["clean_margin"] = run.get("clean_margin", CLEAN_MARGIN_DEFAULT)
             metadata["stray_gap"] = run.get("stray_gap", STRAY_GAP_DEFAULT)
+            metadata["clean_size"] = run.get("clean_size", CLEAN_SIZE_DEFAULT)
     # Record the cleanup settings only where they shaped the saved mask.
-    adjustment = {"cutoff": cutoff, "fill_holes": not remove_fill}
-    if pre_cleanup or remove_fill:
+    clean_on = bool(prepared["clean_size"])
+    adjustment = {"cutoff": cutoff, "fill_holes": prepared["fill_holes"]}
+    if pre_cleanup or remove_fill or clean_on:
         adjustment["clean_margin"] = prepared["clean_margin"]
-    if pre_cleanup:
+    if pre_cleanup or clean_on:
         adjustment["stray_gap"] = prepared["stray_gap"]
+        adjustment["clean_size"] = prepared["clean_size"]
     metadata.setdefault("threshold_adjustments", {})[sample_id] = adjustment
     changes[metadata_path] = (json.dumps(metadata, indent=2) + "\n").encode("utf-8")
 
@@ -323,6 +346,7 @@ def apply_threshold_adjustment(
 
 def apply_threshold_adjustments(
     run, pairs, cutoff, *, remove_fill=False, clean_margin=None, stray_gap=None,
+    clean_size=None,
 ):
     """Apply one set of controls to marked specimens, restoring all on failure."""
     pairs = list(pairs)
@@ -333,7 +357,7 @@ def apply_threshold_adjustments(
     for pair in pairs:
         measure_threshold_adjustment(
             run, pair, cutoff, remove_fill=remove_fill,
-            clean_margin=clean_margin, stray_gap=stray_gap,
+            clean_margin=clean_margin, stray_gap=stray_gap, clean_size=clean_size,
         )
 
     output_dir = Path(run["output_path"])
@@ -370,7 +394,7 @@ def apply_threshold_adjustments(
             for pair in pairs:
                 apply_threshold_adjustment(
                     run, pair, cutoff, remove_fill=remove_fill,
-                    clean_margin=clean_margin, stray_gap=stray_gap,
+                    clean_margin=clean_margin, stray_gap=stray_gap, clean_size=clean_size,
                 )
         except Exception:
             for path, backup in backups.items():

@@ -34,6 +34,7 @@ mats run -i ./images -o ./out -r results.csv --sheet-dimensions 12x12in
 | `--measure-pre-cleanup` | Measure from the raw binary segmentation before gap closing and hole filling, after clearing the edge margin and dropping stray pieces (see below). | off (cleaned mask) |
 | `--clean-margin` | With `--measure-pre-cleanup`: width of the band cleared along every target-box edge, as a percent of the box's shorter side, `0`–`10`. `0` clears nothing. | `1` |
 | `--stray-gap` | With `--measure-pre-cleanup`: drop pieces whose nearest pixel is farther from the leaf than this fraction of the leaf's bounding-box diagonal, `0`–`10`. `0` keeps only the leaf. | `0.25` |
+| `--clean-size` | With `--measure-pre-cleanup`: after the margin and stray pieces are cleared, remove white specks and fill enclosed holes whose inscribed radius is below this many pixels, `0`–`50`. The app's **Clean size**. | `0` (off) |
 | `-w, --workers` | Parallel workers. Only the CPU `threshold` path over pre-made target boxes parallelizes; model-backed runs use one worker. | auto |
 | `--save-axes` | Also write per-image length/width overlay images for QC. | off |
 | `--export` | Repeatable: `pre-cleanup`, `overlay`, `cutout`, `axes`. Overlays, cutouts, and axes use the selected measurement mask. | none |
@@ -66,11 +67,25 @@ box: any part of a leaf within the margin is cleared too. Raise `--stray-gap` wh
 a leaf's parts lie apart, such as separated leaflets; lower it to drop specks
 closer to the leaf.
 
+`--clean-size` then cleans what is left by size. Each remaining piece and each
+enclosed hole is sized by its inscribed radius, the distance from its deepest
+pixel to its edge. White specks with a radius below the clean size are removed,
+and holes with a radius below it are filled; the leaf is always kept, and nothing
+is flash-filled, so a hole at least that large stays excluded from area. It is the
+**Clean size** slider in the app, and gives exactly the mask that slider previews.
+For example, measure raw masks at the medium threshold, removing specks and
+filling holes under 3 px:
+
+```bash
+mats run -i ./images -o ./out -r results.csv --sheet-dimensions 12x12in \
+  --measure-pre-cleanup --threshold-level medium --clean-size 3
+```
+
 Without this flag, measurements use the cleaned mask as before. This setting is
 independent of `--export pre-cleanup`, which writes the raw mask exactly as
 segmented, stray pieces included. Each results CSV has a `.meta.json` companion
 recording its measurement source, segmentation method, unit, and schema, plus
-the clean margin and stray gap for pre-cleanup runs.
+the clean margin, stray gap, and clean size for pre-cleanup runs.
 
 `--mask-method both` detects markers once per image and then measures it with
 Otsu and with BiRefNet. Each method gets its own results CSV and failure log,

@@ -140,6 +140,10 @@ Currently true, and worth knowing because users ask:
   printed box outline lands), keeps the largest remaining object (the leaf),
   and drops pieces that touch the band or lie beyond `--stray-gap` (default
   `0.25` × the leaf's bounding-box diagonal) — see `mask_cleanup.clean_raw_mask`.
+  `--clean-size` (pixels, default `0` = off, pre-cleanup only) then removes
+  specks and fills holes below that inscribed radius — the app's **Clean size**,
+  via `mask_cleanup.raw_measurement_mask`; Adjust's Overwrite saves it for Otsu
+  specimens. `--clean-margin` is the edge margin, not the clean size.
   Clean image and Remove flashfill use the same margin. `--export pre-cleanup`
   still writes the untouched raw mask. The default cleaned path is unaffected.
 - `mats fetch-weights` with no flag fetches **RF-DETR only**; BiRefNet needs

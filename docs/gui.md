@@ -56,9 +56,12 @@ After a run, **Go to Export** in the sidebar opens the Export tab.
    touch that band or lie farther from the leaf than **Stray-piece distance**,
    a fraction of the leaf's bounding-box diagonal (default 0.25; 0 keeps only
    the leaf). Specks near the leaf still count toward area, width, and length,
-   and holes stay excluded from area. Lay leaves inside the printed box, since
-   any part of a leaf within the margin is cleared too. Both settings are
-   grayed out unless the box is checked. The default uses the cleaned mask.
+   and holes stay excluded from area, unless **Clean size** (px, default 0) is
+   above 0: it then removes white specks and fills enclosed holes whose
+   inscribed radius is below that many pixels, without flash-filling the leaf.
+   Lay leaves inside the printed box, since any part of a leaf within the
+   margin is cleared too. All three settings are grayed out unless the box is
+   checked. The default uses the cleaned mask.
    This choice is separate from exporting pre-cleanup mask images, which keep
    every piece. Choose result
    units in **mm**, **cm**, or **in** (separate from the printed-sheet calibration
@@ -123,13 +126,17 @@ After a run, **Go to Export** in the sidebar opens the Export tab.
    **Use threshold for next run** sets a custom cutoff in Setup for the next
    analysis. BiRefNet specimens have no threshold, reset, next-run, or
    overwrite controls. The **Clean size** slider, in the same box for both
-   methods, starts at 0, which shows the run's usual mask; its **?** explains
-   it. Above 0 it previews Clean image, a gentler alternative to MATS cleanup:
+   methods, starts at the specimen's saved clean size, else the run's (0
+   unless set in Setup); 0 turns Clean image off, and its **?** explains it.
+   Above 0 it previews Clean image, a gentler alternative to MATS cleanup:
    it clears the specimen's edge margin, drops pieces that touch it or lie
    beyond the stray-piece distance, then drops disconnected white specks and
    fills enclosed holes smaller than the clean size. It always keeps the leaf
-   and never flash-fills. It is preview-only, so overwriting is disabled until
-   the clean size is back at 0. BiRefNet adjustments remain preview-only.
+   and never flash-fills. For an Otsu specimen, either Overwrite button saves
+   the mask shown, re-measures it under the run's measurement source, and
+   records the clean size with the cutoff in the `.meta.json`; in a
+   cleaned-mask run, Clean image then replaces MATS cleanup (and Remove
+   flashfill) in the saved mask. BiRefNet adjustments remain preview-only.
    Each results CSV has a `.meta.json` companion recording which measurement
    source was used and any per-sample threshold adjustments.
 5. **CPU Options** retains the worker controls. The app detects the CPU workers assigned to it (including HPC

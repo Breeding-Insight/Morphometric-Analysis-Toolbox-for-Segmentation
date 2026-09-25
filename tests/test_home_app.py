@@ -36,7 +36,7 @@ from mats.app.Home import (
     zip_download_name,
 )
 from mats.dimensions import parse_template_dimensions
-from mats.mask_settings import CLEAN_MARGIN_DEFAULT, STRAY_GAP_DEFAULT
+from mats.mask_settings import CLEAN_MARGIN_DEFAULT, CLEAN_SIZE_DEFAULT, STRAY_GAP_DEFAULT
 
 
 HOME_PAGE = Path(__file__).resolve().parents[1] / "src" / "mats" / "app" / "Home.py"
@@ -439,17 +439,30 @@ def test_raw_measurement_checkbox_persists_in_setup():
 def test_cleanup_settings_are_grayed_out_unless_measuring_pre_cleanup():
     app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
     margin, gap = app.number_input(key="clean_margin"), app.number_input(key="stray_gap")
-    assert (margin.value, gap.value) == (CLEAN_MARGIN_DEFAULT, STRAY_GAP_DEFAULT)
-    assert margin.disabled and gap.disabled
+    size = app.number_input(key="clean_size")
+    assert (margin.value, gap.value, size.value) == (
+        CLEAN_MARGIN_DEFAULT, STRAY_GAP_DEFAULT, CLEAN_SIZE_DEFAULT,
+    )
+    assert margin.disabled and gap.disabled and size.disabled
 
     app.checkbox(key="measure_pre_cleanup").set_value(True).run(timeout=30)
     assert not app.number_input(key="clean_margin").disabled
     assert not app.number_input(key="stray_gap").disabled
+    assert not app.number_input(key="clean_size").disabled
     app.number_input(key="clean_margin").set_value(2.0).run(timeout=30)
     app.number_input(key="stray_gap").set_value(0.6).run(timeout=30)
+    app.number_input(key="clean_size").set_value(3).run(timeout=30)
     assert not app.exception
     assert app.number_input(key="clean_margin").value == 2.0
     assert app.number_input(key="stray_gap").value == 0.6
+    assert app.number_input(key="clean_size").value == 3
+    assert app.session_state["diagnostics_context"]["clean_size"] == 3
+
+    # Unchecked, the grayed-out clean size keeps its value but never reaches a run.
+    app.checkbox(key="measure_pre_cleanup").set_value(False).run(timeout=30)
+    assert not app.exception
+    assert app.number_input(key="clean_size").disabled
+    assert app.session_state["diagnostics_context"]["clean_size"] == 0
 
 
 def _custom_threshold_sliders(app):
@@ -1105,19 +1118,21 @@ def test_adjust_table_has_no_marking_for_birefnet():
     ]
 
 
-def test_clean_image_previews_without_allowing_an_overwrite(tmp_path):
+def test_clean_image_preview_is_saved_by_overwrite(tmp_path):
     results_path = tmp_path / "results.csv"
     results_path.write_text("sample_id,area_cm2,width_cm,length_cm\nleaf_1,4.0,2.0,2.0\n")
     target = tmp_path / "leaf_1_preview_target_box.png"
     image = np.full((40, 40, 3), 255, dtype=np.uint8)
     image[5:35, 5:35] = 100
-    image[2, 2] = 0
+    image[10:22, 10:22] = 255                         # hole, inscribed radius 6
+    image[2, 2] = 0                                   # 1 px speck beside the leaf
     assert cv2.imwrite(str(target), image)
     app = AppTest.from_file(str(HOME_PAGE))
     app.session_state[WORKSPACE_TAB_KEY] = "Adjust"
     app.session_state["last_run"] = _last_run(
         {"threshold": results_path}, succeeded=1, failed=0, total=1,
         run_id="clean-test", threshold_value=125, measurement_source="cleaned",
+        results_unit="cm", scale_axes_by_sample={"threshold": {"leaf_1": (10, 10)}},
     )
     app.session_state["viewer_pairs"] = {
         "threshold": [{"sample_id": "leaf_1", "target_box": str(target), "mask": None}]
@@ -1133,17 +1148,59 @@ def test_clean_image_previews_without_allowing_an_overwrite(tmp_path):
         assert not any("clean_image" in (box.key or "") for box in app.checkbox)
         assert mounted[-1]["clean_radius"] == 0
         assert mounted[-1]["clean_levels_image"] and mounted[-1]["cleaned_image"]
-        assert "0 shows the run's usual mask" in mounted[-1]["clean_help"]
+        assert "0 turns Clean image off" in mounted[-1]["clean_help"]
+        assert "Overwrite saves" in mounted[-1]["clean_help"]
         assert not app.button(key="apply_adjustment_clean-test:leaf_1").disabled
 
-        # Dragging the slider above 0 records it; the preview can't be saved then.
+        # Releasing the slider above 0 records it, and Overwrite saves that mask.
         app.session_state["clean_preview_radii"] = {"clean-test:threshold:leaf_1": 5}
+        app.run(timeout=30)
+        assert mounted[-1]["clean_radius"] == 5
+        assert any("Overwrite saves it" in item.value for item in app.caption)
+        assert not app.button(key="apply_adjustment_clean-test:leaf_1").disabled
+        app.button(key="apply_adjustment_clean-test:leaf_1").click().run(timeout=30)
+
+    assert not app.exception
+    assert any("clean size 5 px" in item.value for item in app.success)
+    saved = pd.read_csv(results_path).set_index("sample_id")
+    assert saved.loc["leaf_1", "area_cm2"] == pytest.approx((900 - 144) / 100)
+    mask = cv2.imread(str(tmp_path / "leaf_1_mask.png"), cv2.IMREAD_GRAYSCALE)
+    assert mask[15, 15] == 0 and mask[2, 2] == 0 and mask[30, 30] == 255
+    assert app.session_state["last_run"]["threshold_adjustments"]["leaf_1"] == {
+        "cutoff": 125, "fill_holes": False, "clean_margin": CLEAN_MARGIN_DEFAULT,
+        "stray_gap": STRAY_GAP_DEFAULT, "clean_size": 5,
+    }
+
+
+@pytest.mark.parametrize("saved, expected", [(None, 3), ({"cutoff": 125, "clean_size": 0}, 0)])
+def test_clean_size_slider_starts_at_the_saved_or_run_clean_size(tmp_path, saved, expected):
+    results_path = tmp_path / "results.csv"
+    results_path.write_text("sample_id,area_cm2,width_cm,length_cm\nleaf_1,4.0,2.0,2.0\n")
+    target = tmp_path / "leaf_1_preview_target_box.png"
+    image = np.full((40, 40, 3), 255, dtype=np.uint8)
+    image[5:35, 5:35] = 100
+    assert cv2.imwrite(str(target), image)
+    app = AppTest.from_file(str(HOME_PAGE))
+    app.session_state[WORKSPACE_TAB_KEY] = "Adjust"
+    app.session_state["last_run"] = _last_run(
+        {"threshold": results_path}, succeeded=1, failed=0, total=1,
+        run_id="run-size", threshold_value=125, measurement_source="pre-cleanup",
+        clean_size=3, threshold_adjustments={"leaf_1": saved} if saved else {},
+    )
+    app.session_state["viewer_pairs"] = {"threshold": [{
+        "sample_id": "leaf_1", "target_box": str(target), "mask": None,
+        "mask_source": "pre-cleanup",
+    }]}
+    mounted = []
+    selected = SimpleNamespace(selection=SimpleNamespace(rows=[0]))
+    with patch("streamlit.dataframe", return_value=selected), patch(
+        "mats.app.threshold_preview.show_threshold_preview",
+        side_effect=lambda **kwargs: mounted.append(kwargs),
+    ):
         app.run(timeout=30)
 
     assert not app.exception
-    assert any("Clean size is above 0" in item.value for item in app.caption)
-    assert app.button(key="apply_adjustment_clean-test:leaf_1").disabled
-    assert app.button(key="apply_marked_adjustment_clean-test:leaf_1").disabled
+    assert mounted[-1]["clean_radius"] == expected
 
 
 def test_pre_cleanup_explorer_settles_on_the_measured_mask(tmp_path):
@@ -1314,6 +1371,37 @@ def test_birefnet_specimen_gets_a_preview_only_clean_image_explorer(tmp_path):
     assert not app.exception
     assert any("Clean size is above 0" in item.value for item in app.caption)
     assert not any("apply_adjustment" in (button.key or "") for button in app.button)
+
+
+def test_birefnet_clean_image_help_says_it_is_preview_only(tmp_path):
+    results_path = tmp_path / "results.csv"
+    results_path.write_text("sample_id,area_cm2,width_cm,length_cm\nleaf_1,4.0,2.0,2.0\n")
+    raw = np.zeros((40, 40), dtype=np.uint8)
+    raw[5:35, 5:35] = 255
+    raw_path = tmp_path / "leaf_1_preview_raw_mask.png"
+    assert cv2.imwrite(str(raw_path), raw)
+    app = AppTest.from_file(str(HOME_PAGE))
+    app.session_state[WORKSPACE_TAB_KEY] = "Adjust"
+    app.session_state["last_run"] = _last_run(
+        {"birefnet": results_path}, succeeded=1, failed=0, total=1,
+        run_id="bir-help", measurement_source="pre-cleanup", clean_size=4,
+    )
+    app.session_state["viewer_pairs"] = {"birefnet": [{
+        "sample_id": "leaf_1", "target_box": None, "mask": None,
+        "raw_mask": str(raw_path), "mask_source": "pre-cleanup",
+    }]}
+    mounted = []
+    selected = SimpleNamespace(selection=SimpleNamespace(rows=[0]))
+    with patch("streamlit.dataframe", return_value=selected), patch(
+        "mats.app.threshold_preview.show_threshold_preview",
+        side_effect=lambda **kwargs: mounted.append(kwargs),
+    ):
+        app.run(timeout=30)
+
+    assert not app.exception
+    assert mounted[-1]["clean_radius"] == 4                 # the run's clean size
+    assert "preview it only" in mounted[-1]["clean_help"]
+    assert "Overwrite" not in mounted[-1]["clean_help"]
 
 
 def test_results_tab_uses_the_completed_run_unit(tmp_path):

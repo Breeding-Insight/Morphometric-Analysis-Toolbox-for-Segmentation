@@ -49,10 +49,17 @@ All notable changes to MATs are documented here. This project adheres to
   for the next run or overwrite the selected specimen's mask, measurement row,
   and dependent images with one button. Marked specimens can receive the same
   settings in one bulk save, each using its own calibration.
-- A preview-only **Clean size** slider in Adjust's Explore and adjust box,
-  for Otsu and BiRefNet specimens. It starts at 0 (the run's usual mask);
-  above 0 it live-previews Clean image, which drops small white specks and
-  fills small enclosed holes without flash-filling the leaf.
+- A **Clean size** slider in Adjust's Explore and adjust box, for Otsu and
+  BiRefNet specimens. Above 0 it live-previews Clean image, which drops small
+  white specks and fills small enclosed holes without flash-filling the leaf.
+  For Otsu specimens, **Overwrite this specimen** and **Overwrite all marked
+  specimens** save that mask, re-measure it, and record the clean size;
+  BiRefNet specimens preview it only.
+- A run-wide clean size for pre-cleanup measurements: `--clean-size PX` in the
+  CLI, **Clean size (px)** in Setup (default 0, off). It removes specks and
+  fills enclosed holes whose inscribed radius is below that many pixels before
+  measuring, exactly as the Adjust slider previews, and is recorded in each
+  results CSV's `.meta.json`. It requires `--measure-pre-cleanup`.
 - Optional measurements from pre-cleanup binary masks in the app and CLI
   (`--measure-pre-cleanup`), with per-CSV metadata recording the source.
   A band along the target-box edge (`--clean-margin`, **Edge margin** in the
@@ -65,7 +72,7 @@ All notable changes to MATs are documented here. This project adheres to
   Clean image (a clean size above 0), Remove flashfill, and the pre-cleanup
   threshold explorer apply
   the same cleanup; the default cleaned measurements are unchanged. In Setup
-  both settings are grayed out unless pre-cleanup measurement is checked; each
+  these settings are grayed out unless pre-cleanup measurement is checked; each
   specimen's explorer can adjust them for its own preview and overwrite.
 - Measure with Otsu and BiRefNet in one run: `--mask-method both`, or check both
   segmentation methods in the app. Markers are detected once per image; each

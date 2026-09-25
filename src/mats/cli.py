@@ -18,9 +18,12 @@ import sys
 from .mask_settings import (
     CLEAN_MARGIN_DEFAULT,
     CLEAN_MARGIN_MAX,
+    CLEAN_SIZE_DEFAULT,
+    CLEAN_SIZE_MAX,
     STRAY_GAP_DEFAULT,
     STRAY_GAP_MAX,
     checked_clean_margin,
+    checked_clean_size,
     checked_stray_gap,
 )
 from .thresholds import parse_threshold_level, threshold_value_for
@@ -51,6 +54,13 @@ def _stray_gap_arg(text):
 def _clean_margin_arg(text):
     try:
         return checked_clean_margin(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
+def _clean_size_arg(text):
+    try:
+        return checked_clean_size(text)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from None
 
@@ -128,6 +138,13 @@ def build_parser():
                           'farther from the leaf than this fraction of the leaf\'s '
                           f'bounding-box diagonal (0-{STRAY_GAP_MAX:g}; 0 keeps only the leaf; '
                           f'default {STRAY_GAP_DEFAULT:g}).')
+    run.add_argument('--clean-size', type=_clean_size_arg, default=CLEAN_SIZE_DEFAULT,
+                     metavar='PX',
+                     help='With --measure-pre-cleanup: after the edge margin and stray pieces '
+                          'are cleared, remove white specks and fill enclosed holes whose '
+                          'inscribed radius is below this many pixels; the leaf is always kept '
+                          'and nothing is flash-filled. This is the app\'s Clean size '
+                          f'(0-{CLEAN_SIZE_MAX}; 0 turns it off; default {CLEAN_SIZE_DEFAULT}).')
     run.add_argument('--save-axes', action='store_true',
                      help='Also save per-image length/width measurement-axis overlays for QC.')
     run.add_argument('--export', action='append', choices=('pre-cleanup', 'overlay', 'cutout', 'axes'),
@@ -207,6 +224,7 @@ def _print_run_banner(args, threshold_value):
         if args.measure_pre_cleanup:
             print(f"Clean margin: {args.clean_margin:g}% of the target box's shorter side")
             print(f"Stray gap: {args.stray_gap:g} x leaf bounding-box diagonal")
+            print(f"Clean size: {args.clean_size} px" if args.clean_size else "Clean size: off")
         if _uses_threshold(args):
             if args.threshold_level == "auto":
                 print("Threshold level: auto (Otsu's method)")
@@ -337,6 +355,8 @@ def _cmd_run(args):
         _fail('--stray-gap requires --measure-pre-cleanup')
     if args.clean_margin != CLEAN_MARGIN_DEFAULT and not args.measure_pre_cleanup:
         _fail('--clean-margin requires --measure-pre-cleanup')
+    if args.clean_size != CLEAN_SIZE_DEFAULT and not args.measure_pre_cleanup:
+        _fail('--clean-size requires --measure-pre-cleanup')
     _require_local_birefnet_for_run(args)
     template_dims = _resolve_template_dims(args, lm)
     threshold_value = threshold_value_for(args.threshold_level)
@@ -385,6 +405,7 @@ def _cmd_run(args):
         measurement_source='pre-cleanup' if args.measure_pre_cleanup else 'cleaned',
         stray_gap=args.stray_gap,
         clean_margin=args.clean_margin,
+        clean_size=args.clean_size,
     )
 
     print(f"\nDone. {result['succeeded']} succeeded, {result['failed']} failed "

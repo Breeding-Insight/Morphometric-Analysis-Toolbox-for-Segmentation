@@ -8,8 +8,11 @@ cv2 = pytest.importorskip("cv2")
 from mats.mask_cleanup import (
     CLEAN_RADIUS_MAX, apply_clean_levels, clean_levels, clean_raw_mask,
     clean_specks_and_holes, clear_margin, drop_stray_pieces, margin_width,
+    raw_measurement_mask,
 )
-from mats.mask_settings import CLEAN_MARGIN_MAX, STRAY_GAP_MAX
+from mats.mask_settings import (
+    CLEAN_MARGIN_MAX, CLEAN_SIZE_MAX, STRAY_GAP_MAX, checked_clean_size,
+)
 
 
 def _leaf():
@@ -206,3 +209,44 @@ def test_clean_raw_mask_is_idempotent_and_feeds_clean_levels():
     assert np.array_equal(clean_raw_mask(kept), kept)
     assert np.array_equal(apply_clean_levels(clean_levels(mask), 0), only_leaf)
     assert np.array_equal(clean_raw_mask(mask, margin=0), drop_stray_pieces(mask))
+
+
+def _speckled_leaf():
+    mask = _leaf()
+    cv2.circle(mask, (80, 80), 3, 0, -1)              # small hole in the leaf
+    mask[25, 100] = 255                               # 1 px speck beside the leaf
+    return mask
+
+
+def test_raw_measurement_mask_is_clean_raw_mask_at_clean_size_0():
+    for mask in (_framed()[0], _speckled_leaf()):
+        assert np.array_equal(raw_measurement_mask(mask), clean_raw_mask(mask))
+        assert np.array_equal(
+            raw_measurement_mask(mask, 0, 0.1, clean_size=0), clean_raw_mask(mask, 0, 0.1)
+        )
+
+
+def test_raw_measurement_mask_above_0_is_the_clean_image_preview():
+    mask = _speckled_leaf()
+    cleaned = raw_measurement_mask(mask, clean_size=5)
+    assert np.array_equal(cleaned, clean_specks_and_holes(mask, 5))
+    assert np.array_equal(cleaned, apply_clean_levels(clean_levels(mask), 5))
+    assert cleaned[25, 100] == 0 and cleaned[80, 80] == 255
+    assert np.array_equal(
+        raw_measurement_mask(mask, 2.0, 0.1, clean_size=5),
+        clean_specks_and_holes(mask, 5, max_gap=0.1, margin=2.0),
+    )
+
+
+@pytest.mark.parametrize("value", [0, 3, CLEAN_SIZE_MAX, "3", " 7 ", np.int64(4)])
+def test_clean_size_accepts_whole_pixels(value):
+    assert checked_clean_size(value) == int(value)
+    assert type(checked_clean_size(value)) is int
+
+
+@pytest.mark.parametrize("value", [-1, CLEAN_SIZE_MAX + 1, 2.5, 3.0, True, "3.5", "big", None])
+def test_clean_size_rejects_other_values(value):
+    with pytest.raises(ValueError, match="clean size"):
+        checked_clean_size(value)
+    with pytest.raises(ValueError, match="clean size"):
+        raw_measurement_mask(_leaf(), clean_size=value)

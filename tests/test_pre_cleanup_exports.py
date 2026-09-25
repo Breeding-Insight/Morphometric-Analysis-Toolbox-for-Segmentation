@@ -169,6 +169,7 @@ def test_pre_cleanup_measurement_keeps_holes_and_nearby_specks(tmp_path):
         "csv_schema": "full",
         "clean_margin": 1.0,
         "stray_gap": 0.25,
+        "clean_size": 0,
     }
     assert "stray_gap" not in json.loads(
         (tmp_path / "cleaned" / "results.csv.meta.json").read_text()
@@ -278,8 +279,168 @@ def test_pre_cleanup_adjustment_measures_without_stray_pieces(tmp_path):
     metadata = json.loads(Path(f"{summary['results_path']}.meta.json").read_text())
     assert metadata["threshold_adjustments"]["leaf"] == {
         "cutoff": 125, "fill_holes": True, "clean_margin": 2.0, "stray_gap": 0.0,
+        "clean_size": 0,
     }
     assert run["threshold_adjustments"]["leaf"]["stray_gap"] == 0.0
+
+
+def _speckled_input(tmp_path):
+    """A leaf with a small hole, a large hole, and a speck just above it."""
+    image = np.full((200, 200, 3), 255, dtype=np.uint8)
+    image[60:140, 60:140] = 0          # leaf
+    image[99:102, 99:102] = 255        # small hole: inscribed radius 2
+    image[70:90, 70:90] = 255          # large hole: inscribed radius 10
+    image[45:50, 95:100] = 0           # near speck: inscribed radius 3
+    path = tmp_path / "leaf_target_box.png"
+    assert cv2.imwrite(str(path), image)
+    return path
+
+
+def _area_px(row):
+    return round(row["leaf_area_cm2"] * row["px_per_cm_width"] * row["px_per_cm_height"])
+
+
+def _preview_mask(summary):
+    return cv2.imread(next(
+        item["path"] for item in summary["preview_artifacts"] if item["kind"] == "preview_mask"
+    ), 0)
+
+
+def test_clean_size_removes_specks_and_fills_small_holes_before_measuring(tmp_path):
+    from mats.mask_cleanup import clean_specks_and_holes
+
+    source = _speckled_input(tmp_path)
+    plain = _pre_cleanup_run(source, tmp_path / "plain")
+    assert _extent_px(plain["result_rows"][0]) == (80, 95)            # speck included
+    assert _area_px(plain["result_rows"][0]) == 80 * 80 - 400 - 9 + 25
+
+    output = tmp_path / "clean"
+    summary = _pre_cleanup_run(source, output, clean_size=5)
+    row = summary["result_rows"][0]
+    assert _extent_px(row) == (80, 80)                                # speck removed
+    assert _area_px(row) == 80 * 80 - 400                              # small hole filled
+    raw = cv2.imread(str(output / "leaf_mask_precleanup_threshold.png"), 0)
+    assert raw[47, 97] == 255 and raw[100, 100] == 0                   # the export stays raw
+    assert np.array_equal(_preview_mask(summary), clean_specks_and_holes(raw, 5))
+    assert summary["clean_size"] == 5
+    metadata = json.loads((output / "results.csv.meta.json").read_text())
+    assert metadata["clean_size"] == 5
+    # The cleaned-mask export is still MATS cleanup, whatever the clean size.
+    assert np.array_equal(
+        cv2.imread(str(output / "leaf_mask.png"), 0),
+        cv2.imread(str(tmp_path / "plain" / "leaf_mask.png"), 0),
+    )
+
+
+@pytest.mark.parametrize("clean_size", [3, "big", 51])
+def test_clean_size_needs_pre_cleanup_and_a_valid_radius(tmp_path, clean_size):
+    with pytest.raises(ValueError, match="clean"):
+        core.run_leaf_morpho_batch(
+            [str(_speckled_input(tmp_path))], str(tmp_path / "out"),
+            str(tmp_path / "out" / "results.csv"), template_dimensions=(10, 10, "cm"),
+            workers=1, clean_size=clean_size,
+        )
+    assert not (tmp_path / "out" / "results.csv").exists()
+
+
+def _adjustable(summary, source, output, measurement_source):
+    paths = {
+        item["kind"]: item["path"]
+        for item in (*summary["artifacts"], *summary["preview_artifacts"])
+        if item["sample_id"] == "leaf"
+    }
+    run = {
+        "by_method": {"threshold": {"results_path": summary["results_path"]}},
+        "results_unit": "cm", "measurement_source": measurement_source,
+        "clean_margin": summary["clean_margin"], "stray_gap": summary["stray_gap"],
+        "clean_size": summary["clean_size"], "output_path": str(output),
+        "mask_methods": ("threshold",), "artifacts": list(summary["artifacts"]),
+    }
+    pair = {"sample_id": "leaf", "target_box": str(source), "mask": paths.get("mask")}
+    if measurement_source == "pre-cleanup":
+        pair.update(mask=paths["preview_mask"], raw_mask=paths["pre_cleanup"],
+                    mask_source="pre-cleanup")
+    return run, pair
+
+
+def _saved_row(summary):
+    with open(summary["results_path"], newline="") as handle:
+        row = next(csv.DictReader(handle))
+    return {key: float(value) for key, value in row.items() if key != "sample_id"}
+
+
+def test_pre_cleanup_overwrite_saves_and_measures_the_clean_size(tmp_path):
+    pytest.importorskip("streamlit")
+    from mats.app.output_adjustment import apply_threshold_adjustment
+    from mats.mask_cleanup import clean_specks_and_holes
+
+    source = _speckled_input(tmp_path)
+    output = tmp_path / "out"
+    summary = _pre_cleanup_run(source, output, threshold_value=125)
+    run, pair = _adjustable(summary, source, output, "pre-cleanup")
+
+    apply_threshold_adjustment(run, pair, 125, clean_size=5)
+
+    row = _saved_row(summary)
+    assert _extent_px(row) == (80, 80) and _area_px(row) == 80 * 80 - 400
+    raw = cv2.imread(pair["raw_mask"], 0)
+    assert raw[47, 97] == 255                                   # raw export untouched
+    assert np.array_equal(cv2.imread(pair["mask"], 0), clean_specks_and_holes(raw, 5))
+    metadata = json.loads(Path(f"{summary['results_path']}.meta.json").read_text())
+    assert metadata["clean_size"] == 0                          # the run's own setting
+    assert metadata["threshold_adjustments"]["leaf"] == {
+        "cutoff": 125, "fill_holes": True, "clean_margin": 1.0, "stray_gap": 0.25,
+        "clean_size": 5,
+    }
+    assert run["threshold_adjustments"]["leaf"]["clean_size"] == 5
+
+    # Clean size 0 restores the run's own measurement.
+    apply_threshold_adjustment(run, pair, 125, clean_size=0)
+    assert _extent_px(_saved_row(summary)) == (80, 95)
+
+
+def test_overwrite_defaults_to_the_run_clean_size(tmp_path):
+    pytest.importorskip("streamlit")
+    from mats.app.output_adjustment import measure_threshold_adjustment
+
+    source = _speckled_input(tmp_path)
+    output = tmp_path / "out"
+    summary = _pre_cleanup_run(source, output, threshold_value=125, clean_size=5)
+    run, pair = _adjustable(summary, source, output, "pre-cleanup")
+    prepared = measure_threshold_adjustment(run, pair, 125)
+    assert prepared["clean_size"] == 5
+    assert np.array_equal(prepared["measurement_mask"], _preview_mask(summary))
+
+
+def test_cleaned_run_overwrite_replaces_mats_cleanup_with_clean_image(tmp_path):
+    pytest.importorskip("streamlit")
+    from mats.app.output_adjustment import apply_threshold_adjustment
+    from mats.mask_cleanup import clean_specks_and_holes
+
+    source = _speckled_input(tmp_path)
+    output = tmp_path / "out"
+    summary = core.run_leaf_morpho_batch(
+        [str(source)], str(output), str(output / "results.csv"),
+        template_dimensions=(10, 10, "cm"), workers=1, compact_csv=False,
+        threshold_value=125, export_options={"axes": True},
+    )
+    assert _area_px(summary["result_rows"][0]) == 80 * 80              # flash-filled
+    run, pair = _adjustable(summary, source, output, "cleaned")
+
+    # Remove flashfill doesn't apply while the clean size is above 0.
+    apply_threshold_adjustment(run, pair, 125, clean_size=5, remove_fill=True)
+
+    raw = core.threshold_mask(cv2.imread(str(source)), 125)
+    saved = cv2.imread(pair["mask"], 0)
+    assert np.array_equal(saved, clean_specks_and_holes(raw, 5))
+    assert saved[80, 80] == 0 and saved[100, 100] == 255 and saved[47, 97] == 0
+    row = _saved_row(summary)
+    assert _extent_px(row) == (80, 80) and _area_px(row) == 80 * 80 - 400
+    metadata = json.loads(Path(f"{summary['results_path']}.meta.json").read_text())
+    assert metadata["threshold_adjustments"]["leaf"] == {
+        "cutoff": 125, "fill_holes": False, "clean_margin": 1.0, "stray_gap": 0.25,
+        "clean_size": 5,
+    }
 
 
 def _framed_input(tmp_path):

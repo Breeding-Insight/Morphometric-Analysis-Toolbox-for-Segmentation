@@ -373,8 +373,10 @@ with st.container(border=True):
     )
     st.caption(
         "Measure from pre-cleanup masks in Setup to calculate area from all raw "
-        "foreground pixels and width/length from their full extent. Each results "
-        "CSV has a `.meta.json` companion recording this choice."
+        "foreground pixels and width/length from their full extent. A Clean size "
+        "above 0 there also removes small specks and fills small holes before "
+        "measuring. Each results CSV has a `.meta.json` companion recording these "
+        "choices."
     )
     st.caption(
         "Select one measurement-table row to inspect that specimen. The Analyze "
@@ -395,9 +397,10 @@ with st.container(border=True):
         "Then press Overwrite all marked specimens, below Overwrite this "
         "specimen, to save the settings to every marked specimen. Existing "
         "overlays, cutouts, and axes are regenerated. Clean "
-        "image, available there for BiRefNet samples too, previews dropping small "
-        "specks and filling small holes with a clean-size slider; it never changes "
-        "saved files."
+        "image drops small specks and fills small holes with a clean-size slider; "
+        "Overwrite saves the clean size with the threshold and re-measures the "
+        "specimen. BiRefNet samples can preview Clean image, but it never changes "
+        "their saved files."
     )
     st.caption(
         "Export lists this run's saved files. Select Otsu, BiRefNet, or both; "
