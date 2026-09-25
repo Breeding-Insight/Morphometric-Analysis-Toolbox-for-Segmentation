@@ -77,7 +77,7 @@ All notable changes to MATs are documented here. This project adheres to
 - Measure with Otsu and BiRefNet in one run: `--mask-method both`, or check both
   segmentation methods in the app. Markers are detected once per image; each
   method writes its own results CSV and failure log (`_threshold`/`_birefnet`
-  suffixes) in the single-method schema, and the Results view can switch
+  suffixes) in the single-method schema, and the Analyze view can switch
   between them. Single-method runs write the same files as before.
 - Separate pre-cleanup binary mask exports for threshold/Otsu and BiRefNet,
   including both methods in one run while measurements use the selected method.

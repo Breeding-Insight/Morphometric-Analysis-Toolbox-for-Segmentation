@@ -65,6 +65,14 @@ def _clean_size_arg(text):
         raise argparse.ArgumentTypeError(str(exc)) from None
 
 
+class _TrackProvided(argparse.Action):
+    """Keep an option's parsed value and whether it was explicitly supplied."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"{self.dest}_provided", True)
+
+
 def build_parser():
     """Build the top-level argument parser."""
     parser = argparse.ArgumentParser(
@@ -126,19 +134,22 @@ def build_parser():
                           'target-box edge (where the printed box outline lands) is cleared, '
                           'the largest object is the leaf, and other pieces are dropped when '
                           'they touch that band or lie farther from the leaf than --stray-gap.')
-    run.add_argument('--clean-margin', type=_clean_margin_arg, default=CLEAN_MARGIN_DEFAULT,
+    run.add_argument('--clean-margin', type=_clean_margin_arg, action=_TrackProvided,
+                     default=CLEAN_MARGIN_DEFAULT,
                      metavar='PERCENT',
                      help='With --measure-pre-cleanup: width of the band cleared along every '
                           'target-box edge, as a percent of the box\'s shorter side '
                           f'(0-{CLEAN_MARGIN_MAX:g}; 0 clears nothing; '
                           f'default {CLEAN_MARGIN_DEFAULT:g}).')
-    run.add_argument('--stray-gap', type=_stray_gap_arg, default=STRAY_GAP_DEFAULT,
+    run.add_argument('--stray-gap', type=_stray_gap_arg, action=_TrackProvided,
+                     default=STRAY_GAP_DEFAULT,
                      metavar='FRACTION',
                      help='With --measure-pre-cleanup: drop pieces whose nearest pixel is '
                           'farther from the leaf than this fraction of the leaf\'s '
                           f'bounding-box diagonal (0-{STRAY_GAP_MAX:g}; 0 keeps only the leaf; '
                           f'default {STRAY_GAP_DEFAULT:g}).')
-    run.add_argument('--clean-size', type=_clean_size_arg, default=CLEAN_SIZE_DEFAULT,
+    run.add_argument('--clean-size', type=_clean_size_arg, action=_TrackProvided,
+                     default=CLEAN_SIZE_DEFAULT,
                      metavar='PX',
                      help='With --measure-pre-cleanup: after the edge margin and stray pieces '
                           'are cleared, remove white specks and fill enclosed holes whose '
@@ -150,7 +161,7 @@ def build_parser():
     run.add_argument('--export', action='append', choices=('pre-cleanup', 'overlay', 'cutout', 'axes'),
                      default=[], help='Additional image export; repeat for multiple kinds.')
     run.add_argument('--pre-cleanup-methods', choices=('selected', 'threshold', 'birefnet', 'both'),
-                     default='selected', help='Methods whose binary masks are saved before cleanup; '
+                     default=None, help='Methods whose binary masks are saved before cleanup; '
                           'selected = every --mask-method method.')
     run.add_argument('--no-target-boxes', action='store_true',
                      help='Do not save new perspective-corrected target-box images.')
@@ -217,7 +228,7 @@ def _pre_cleanup_methods(args):
     """The methods whose pre-cleanup masks this run exports."""
     if 'pre-cleanup' not in args.export:
         return ()
-    if args.pre_cleanup_methods == 'selected':
+    if args.pre_cleanup_methods in (None, 'selected'):
         return _measured_methods(args)
     if args.pre_cleanup_methods == 'both':
         return ('threshold', 'birefnet')
@@ -252,7 +263,7 @@ def _print_run_banner(args, threshold_value):
     if args.output_mode == "target-boxes" and args.export:
         print("Segmentation exports ignored because output mode is target-boxes.")
     elif 'pre-cleanup' in args.export:
-        print(f"Pre-cleanup methods: {args.pre_cleanup_methods}")
+        print(f"Pre-cleanup methods: {args.pre_cleanup_methods or 'selected'}")
 
 
 def _resolve_template_dims(args, lm):
@@ -390,13 +401,19 @@ def _cmd_run(args):
 
     if args.output_mode != 'masks' and args.measure_pre_cleanup:
         _fail('--measure-pre-cleanup requires --output-mode masks')
-    if args.pre_cleanup_methods != 'selected' and 'pre-cleanup' not in args.export:
+    if args.pre_cleanup_methods is not None and 'pre-cleanup' not in args.export:
         _fail('--pre-cleanup-methods requires --export pre-cleanup')
-    if args.stray_gap != STRAY_GAP_DEFAULT and not args.measure_pre_cleanup:
+    if not args.measure_pre_cleanup and (
+        getattr(args, 'stray_gap_provided', False) or args.stray_gap != STRAY_GAP_DEFAULT
+    ):
         _fail('--stray-gap requires --measure-pre-cleanup')
-    if args.clean_margin != CLEAN_MARGIN_DEFAULT and not args.measure_pre_cleanup:
+    if not args.measure_pre_cleanup and (
+        getattr(args, 'clean_margin_provided', False) or args.clean_margin != CLEAN_MARGIN_DEFAULT
+    ):
         _fail('--clean-margin requires --measure-pre-cleanup')
-    if args.clean_size != CLEAN_SIZE_DEFAULT and not args.measure_pre_cleanup:
+    if not args.measure_pre_cleanup and (
+        getattr(args, 'clean_size_provided', False) or args.clean_size != CLEAN_SIZE_DEFAULT
+    ):
         _fail('--clean-size requires --measure-pre-cleanup')
     _require_local_birefnet_for_run(args)
     template_dims = _resolve_template_dims(args, lm)

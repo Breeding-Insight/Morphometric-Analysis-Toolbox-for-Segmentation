@@ -8,8 +8,6 @@ import pytest
 
 np = pytest.importorskip("numpy")
 cv2 = pytest.importorskip("cv2")
-pytest.importorskip("torch")
-pytest.importorskip("rfdetr")
 from mats import core
 
 
@@ -234,7 +232,6 @@ def test_pre_cleanup_measurement_drops_border_and_far_pieces(tmp_path):
 
 
 def test_pre_cleanup_adjustment_measures_without_stray_pieces(tmp_path):
-    pytest.importorskip("streamlit")
     from mats.app.output_adjustment import apply_threshold_adjustment
 
     source = _stray_input(tmp_path)
@@ -370,7 +367,6 @@ def _saved_row(summary):
 
 
 def test_pre_cleanup_overwrite_saves_and_measures_the_clean_size(tmp_path):
-    pytest.importorskip("streamlit")
     from mats.app.output_adjustment import apply_threshold_adjustment
     from mats.mask_cleanup import clean_specks_and_holes
 
@@ -400,7 +396,6 @@ def test_pre_cleanup_overwrite_saves_and_measures_the_clean_size(tmp_path):
 
 
 def test_overwrite_defaults_to_the_run_clean_size(tmp_path):
-    pytest.importorskip("streamlit")
     from mats.app.output_adjustment import measure_threshold_adjustment
 
     source = _speckled_input(tmp_path)
@@ -413,7 +408,6 @@ def test_overwrite_defaults_to_the_run_clean_size(tmp_path):
 
 
 def test_cleaned_run_overwrite_replaces_mats_cleanup_with_clean_image(tmp_path):
-    pytest.importorskip("streamlit")
     from mats.app.output_adjustment import apply_threshold_adjustment
     from mats.mask_cleanup import clean_specks_and_holes
 
@@ -474,7 +468,6 @@ def test_pre_cleanup_measurement_ignores_edge_lines_that_outweigh_the_leaf(tmp_p
 
 
 def test_remove_flashfill_adjustment_clears_the_edge_margin(tmp_path):
-    pytest.importorskip("streamlit")
     from mats.app.output_adjustment import measure_threshold_adjustment
 
     source = _framed_input(tmp_path)

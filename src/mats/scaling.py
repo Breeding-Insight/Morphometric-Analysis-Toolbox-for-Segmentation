@@ -2,8 +2,8 @@
 
 Deliberately dependency-light: this module imports only the standard library so
 the offline test suite can exercise the scale math without importing
-:mod:`mats.core` (which pulls in torch, rfdetr, cv2 and transformers). Keep it
-that way -- do not add heavy imports here.
+:mod:`mats.core` (which imports NumPy and OpenCV). Keep it that way -- do not
+add heavy imports here.
 
 The pipeline calibrates against the *template*, not the leaf: the warped
 target-box raster's pixel width/height are compared to the template's known

@@ -46,7 +46,7 @@ def test_run_defaults():
     assert ns.sheet_dimensions is None
     assert ns.template_dimensions is None
     assert ns.export == []
-    assert ns.pre_cleanup_methods == "selected"
+    assert ns.pre_cleanup_methods is None
     assert not ns.no_target_boxes and not ns.no_masks and not ns.no_failure_log
     assert ns.dataset_format is None
 
@@ -145,6 +145,29 @@ def test_mask_method_both_measures_and_exports_each_method():
     assert _measured_methods(single) == ("birefnet",)
     assert _pre_cleanup_methods(single) == ("birefnet",)
     assert _pre_cleanup_methods(parse(["run", "-i", "x", "--mask-method", "both"])) == ()
+
+
+@pytest.mark.parametrize("method", ["selected", "threshold"])
+def test_pre_cleanup_method_option_requires_export(method, tmp_path, monkeypatch, capsys):
+    calls = []
+    _fake_core(monkeypatch, calls)
+    args = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"),
+        "--pre-cleanup-methods", method,
+    ])
+    with pytest.raises(SystemExit) as exc:
+        _cmd_run(args)
+    assert exc.value.code == 2
+    assert "--pre-cleanup-methods requires --export pre-cleanup" in capsys.readouterr().err
+    assert not calls
+
+
+def test_default_pre_cleanup_method_applies_when_export_requested():
+    args = build_parser().parse_args([
+        "run", "--mask-method", "both", "--export", "pre-cleanup",
+    ])
+    assert args.pre_cleanup_methods is None
+    assert _pre_cleanup_methods(args) == ("threshold", "birefnet")
 
 
 def test_unknown_export_rejected():
@@ -290,7 +313,11 @@ def test_clean_size_reaches_the_pipeline(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "flag, value", [("--stray-gap", "0.6"), ("--clean-margin", "0.6"), ("--clean-size", "3")],
+    "flag, value", [
+        ("--stray-gap", "0.6"), ("--stray-gap", str(STRAY_GAP_DEFAULT)),
+        ("--clean-margin", "0.6"), ("--clean-margin", str(CLEAN_MARGIN_DEFAULT)),
+        ("--clean-size", "3"), ("--clean-size", str(CLEAN_SIZE_DEFAULT)),
+    ],
 )
 def test_cleanup_settings_require_pre_cleanup_measurement(
     flag, value, tmp_path, monkeypatch, capsys,

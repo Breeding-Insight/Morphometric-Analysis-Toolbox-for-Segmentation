@@ -18,11 +18,6 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 # Third-party libraries
 import numpy as np
 import cv2
-import torch
-import torch.nn.functional as F
-from PIL import Image
-from rfdetr import RFDETRLarge
-from tqdm import tqdm  # type: ignore[import-not-found]
 
 # Optional "enhanced QR reading" backends. The default install decodes QR codes
 # with OpenCV only (no system libraries). Installing the optional extra --
@@ -110,6 +105,8 @@ def resolve_rfdetr_device(device_override=None):
     forced_device = os.environ.get("RF_DETR_DEVICE")
     if forced_device:
         return forced_device.lower()
+    import torch
+
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available() and torch.backends.mps.is_built():
@@ -125,6 +122,8 @@ def get_marker_model(device_override=None):
             if device in _MARKER_MODELS:
                 return _MARKER_MODELS[device]
             from . import weights
+            from rfdetr import RFDETRLarge
+
             checkpoint = weights.ensure_weight("rf-detr")  # resolves or auto-fetches once
             model = RFDETRLarge(
                 resolution=RF_DETR_MARKER_RESOLUTION,
@@ -157,6 +156,8 @@ def pad_to_square_for_rfdetr(
     target_size=RF_DETR_MARKER_RESOLUTION,
     fill=RF_DETR_MARKER_PAD_COLOR,
 ):
+    from PIL import Image
+
     orig_w, orig_h = pil_img.size
     scale = target_size / max(orig_w, orig_h)
     new_w = int(round(orig_w * scale))
@@ -191,6 +192,8 @@ def unpad_xyxy(xyxy, pad_info):
 
 
 def detect_marker_geometry(image_bgr, confidence=RF_DETR_MARKER_CONFIDENCE, device_override=None):
+    from PIL import Image
+
     pil_img = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
     padded_img, pad_info = pad_to_square_for_rfdetr(pil_img)
     device = resolve_rfdetr_device(device_override)
@@ -224,6 +227,8 @@ def detect_marker_centers(image_bgr, confidence=RF_DETR_MARKER_CONFIDENCE, devic
 
 
 def resolve_birefnet_device(device_override=None):
+    import torch
+
     if device_override is not None:
         return torch.device(device_override)
     report = birefnet_device_report()
@@ -251,6 +256,8 @@ def get_birefnet_model(device_override=None):
 
             require_birefnet_dependencies()
             checkpoint = weights.require_local_weight("birefnet")
+            import torch
+
             model = create_birefnet_model()
             ckpt = torch.load(
                 str(checkpoint),
@@ -266,6 +273,9 @@ def get_birefnet_model(device_override=None):
 
 
 def _preprocess_birefnet_image(image_bgr, image_size=BIREFNET_IMAGE_SIZE):
+    import torch
+    from PIL import Image
+
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(image_rgb).convert("RGB")
     pil_img = pil_img.resize((image_size, image_size), Image.BILINEAR)
@@ -276,7 +286,6 @@ def _preprocess_birefnet_image(image_bgr, image_size=BIREFNET_IMAGE_SIZE):
     return tensor.unsqueeze(0)
 
 
-@torch.no_grad()
 def predict_birefnet_mask(
     image_bgr,
     image_size=BIREFNET_IMAGE_SIZE,
@@ -284,21 +293,25 @@ def predict_birefnet_mask(
     device_override=None,
 ):
     """Predict a single-channel 0/255 leaf foreground mask for a BGR image."""
-    model = get_birefnet_model(device_override)
-    device = resolve_birefnet_device(device_override)
-    orig_h, orig_w = image_bgr.shape[:2]
-    inp = _preprocess_birefnet_image(image_bgr, image_size=image_size).to(device)
+    import torch
+    import torch.nn.functional as F
 
-    outputs = model(inp)
-    pred = outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
-    pred = torch.sigmoid(pred)
-    pred = F.interpolate(
-        pred,
-        size=(orig_h, orig_w),
-        mode="bilinear",
-        align_corners=False,
-    )
-    return (pred[0, 0].cpu().numpy() > threshold).astype(np.uint8) * 255
+    with torch.no_grad():
+        model = get_birefnet_model(device_override)
+        device = resolve_birefnet_device(device_override)
+        orig_h, orig_w = image_bgr.shape[:2]
+        inp = _preprocess_birefnet_image(image_bgr, image_size=image_size).to(device)
+
+        outputs = model(inp)
+        pred = outputs[-1] if isinstance(outputs, (list, tuple)) else outputs
+        pred = torch.sigmoid(pred)
+        pred = F.interpolate(
+            pred,
+            size=(orig_h, orig_w),
+            mode="bilinear",
+            align_corners=False,
+        )
+        return (pred[0, 0].cpu().numpy() > threshold).astype(np.uint8) * 255
 
 # QReader instantiation downloads a detector model, so defer it until an
 # enhanced decode is actually needed (and only if the optional extra is present).
@@ -1407,7 +1420,8 @@ def run_leaf_morpho_batch(
     )
     sample_ids = [target_box_sample_id(p) if is_target_box_image(p)
                   else os.path.splitext(os.path.basename(p))[0] for p in input_images]
-    if len(sample_ids) != len(set(sample_ids)):
+    sample_keys = [sample_id.casefold() for sample_id in sample_ids]
+    if len(sample_keys) != len(set(sample_keys)):
         raise ValueError("Input images contain duplicate sample IDs; use unique basenames")
     if execution_device not in {"auto", "cpu", "hybrid"}:
         raise ValueError("execution_device must be 'auto', 'cpu', or 'hybrid'")

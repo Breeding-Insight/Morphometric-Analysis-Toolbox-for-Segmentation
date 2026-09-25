@@ -277,7 +277,7 @@ export default function(component) {
       return;
     }
     loadImage(data.cleaned_image).then((cleaned) => {
-      if (disposed || dragging || Number(slider.value) !== cutoff) return;
+      if (disposed || dragging || cleanActive() || Number(slider.value) !== cutoff) return;
       const settled = readPixels(cleaned);
       paint((i) => settled[i] >= 128);
       if (data.measurement_source === 'pre-cleanup') {
