@@ -158,6 +158,20 @@ def build_parser():
                      help='Do not save the cleaned measurement masks.')
     run.add_argument('--no-failure-log', action='store_true',
                      help='Do not write the failures/warnings CSV.')
+    run.add_argument('--dataset-format', choices=('png', 'yolo-seg', 'yolo-detect', 'coco'),
+                     default=None, help='Also export an aligned training dataset ZIP to the output '
+                     'folder: PNG mask pairs, YOLO segmentation, YOLO detection, or COCO segmentation.')
+    run.add_argument('--dataset-split', nargs=3, type=int, metavar=('TRAIN', 'VAL', 'TEST'),
+                     default=None, help='Training/validation/test percentages; must total 100 '
+                     '(default: 70 20 10).')
+    run.add_argument('--dataset-seed', type=int, default=None,
+                     help='Reproducible split seed (default: 42).')
+    run.add_argument('--dataset-method', choices=('threshold', 'birefnet'), default=None,
+                     help='Labeling method when --mask-method both (default: first selected method).')
+    run.add_argument('--dataset-mask-source', choices=('measured', 'raw'), default=None,
+                     help='Use the measured mask or raw pre-cleanup mask (default: measured).')
+    run.add_argument('--dataset-groups', default=None, metavar='CSV',
+                     help='UTF-8 CSV with sample_id,group_id columns; keep each group in one split.')
 
     app = sub.add_parser('app', help='Launch the Streamlit GUI.')
     app.add_argument('extra', nargs=argparse.REMAINDER,
@@ -347,6 +361,33 @@ def _require_local_birefnet_for_run(args):
 def _cmd_run(args):
     from . import core as lm
 
+    dataset_options = (
+        args.dataset_split, args.dataset_seed, args.dataset_method,
+        args.dataset_mask_source, args.dataset_groups,
+    )
+    if not args.dataset_format and any(option is not None for option in dataset_options):
+        _fail('--dataset-format is required when using other --dataset-* options')
+    percentages = tuple(args.dataset_split or (70, 20, 10))
+    dataset_seed = 42 if args.dataset_seed is None else args.dataset_seed
+    dataset_mask_source = args.dataset_mask_source or 'measured'
+    dataset_groups = {}
+    if args.dataset_format:
+        from .dataset_export import read_group_csv, split_counts
+
+        if args.output_mode != 'masks':
+            _fail('--dataset-format requires --output-mode masks')
+        if args.dataset_method and args.dataset_method not in _measured_methods(args):
+            _fail('--dataset-method must be selected by --mask-method')
+        if dataset_seed < 0:
+            _fail('--dataset-seed must be zero or greater')
+        try:
+            split_counts(0, percentages)
+            if args.dataset_groups:
+                with open(args.dataset_groups, 'rb') as group_file:
+                    dataset_groups = read_group_csv(group_file.read())
+        except (OSError, ValueError) as exc:
+            _fail(f'invalid dataset settings: {exc}')
+
     if args.output_mode != 'masks' and args.measure_pre_cleanup:
         _fail('--measure-pre-cleanup requires --output-mode masks')
     if args.pre_cleanup_methods != 'selected' and 'pre-cleanup' not in args.export:
@@ -375,8 +416,19 @@ def _cmd_run(args):
     if not input_images:
         _fail(f"No images found in {input_dir}")
     print(f"Found {len(input_images)} image(s).")
+    if dataset_groups:
+        sample_ids = {
+            lm.target_box_sample_id(path) if lm.is_target_box_image(path)
+            else os.path.splitext(os.path.basename(path))[0]
+            for path in input_images
+        }
+        unknown = sorted(set(dataset_groups) - sample_ids)
+        if unknown:
+            _fail('dataset group CSV contains unknown sample IDs: ' + ', '.join(unknown[:5]))
 
     output_dir = _resolve_output_dir(args)
+    if args.dataset_format and output_dir is False:
+        _fail('--dataset-format requires an output directory')
     export_options = {
         'target_boxes': not args.no_target_boxes,
         'cleaned_masks': not args.no_masks,
@@ -386,27 +438,41 @@ def _cmd_run(args):
         'axes': args.save_axes or 'axes' in args.export,
     }
 
-    result = lm.run_leaf_morpho_batch(
-        input_images=input_images,
-        output_dir=output_dir,
-        results_path=results_path,
-        template_dimensions=template_dims,
-        output_mode=args.output_mode,
-        mask_method=args.mask_method,
-        threshold_value=threshold_value,
-        workers=args.workers,
-        write_failures=not args.no_failure_log,
-        compact_csv=(args.csv_schema == "compact"),
-        results_unit=args.results_unit,
-        save_measurement_axes=args.save_axes,
-        serialize_model_inference=False,
-        progress_callback=_make_progress_callback(),
-        export_options=export_options,
-        measurement_source='pre-cleanup' if args.measure_pre_cleanup else 'cleaned',
-        stray_gap=args.stray_gap,
-        clean_margin=args.clean_margin,
-        clean_size=args.clean_size,
-    )
+    from contextlib import nullcontext
+    from tempfile import TemporaryDirectory
+
+    preview_context = (TemporaryDirectory(prefix='mats_dataset_preview_')
+                       if args.dataset_format else nullcontext(None))
+    with preview_context as preview_dir:
+        if preview_dir:
+            export_options['preview_dir'] = preview_dir
+        result = lm.run_leaf_morpho_batch(
+            input_images=input_images,
+            output_dir=output_dir,
+            results_path=results_path,
+            template_dimensions=template_dims,
+            output_mode=args.output_mode,
+            mask_method=args.mask_method,
+            threshold_value=threshold_value,
+            workers=args.workers,
+            write_failures=not args.no_failure_log,
+            compact_csv=(args.csv_schema == "compact"),
+            results_unit=args.results_unit,
+            save_measurement_axes=args.save_axes,
+            serialize_model_inference=False,
+            progress_callback=_make_progress_callback(),
+            export_options=export_options,
+            measurement_source='pre-cleanup' if args.measure_pre_cleanup else 'cleaned',
+            stray_gap=args.stray_gap,
+            clean_margin=args.clean_margin,
+            clean_size=args.clean_size,
+        )
+        if args.dataset_format:
+            _export_run_dataset(
+                result, input_images, output_dir, args.dataset_format,
+                args.dataset_method or result['methods'][0], percentages,
+                dataset_seed, dataset_mask_source, dataset_groups,
+            )
 
     print(f"\nDone. {result['succeeded']} succeeded, {result['failed']} failed "
           f"({result['workers']} worker(s): {result['worker_reason']}).")
@@ -422,6 +488,53 @@ def _cmd_run(args):
     if result.get("failure_report_path"):
         print(f"Failure report written to: {result['failure_report_path']}")
     return 0
+
+
+def _export_run_dataset(
+    result, input_images, output_dir, dataset_format, method, percentages,
+    seed, mask_source, groups,
+):
+    """Package the completed run while its private preview files still exist."""
+    import tempfile
+    from pathlib import Path
+
+    from .dataset_export import pairs_from_manifest, write_dataset_zip
+
+    pairs = pairs_from_manifest(
+        result['artifacts'], input_images, method,
+        measurement_source=result['measurement_source'],
+        preview_artifacts=result['preview_artifacts'],
+    )
+    pair_ids = {pair['sample_id'] for pair in pairs}
+    groups = {sample_id: group for sample_id, group in groups.items()
+              if sample_id in pair_ids}
+    base = Path(output_dir) / f'mats_training_{method}_{dataset_format}'
+    destination = base.with_suffix('.zip')
+    index = 2
+    while destination.exists():
+        destination = Path(f'{base}_{index}.zip')
+        index += 1
+    with tempfile.NamedTemporaryFile(
+        dir=output_dir, prefix='.mats_dataset_', suffix='.zip', delete=False,
+    ) as temp_file:
+        temporary = Path(temp_file.name)
+    try:
+        manifest = write_dataset_zip(
+            pairs, temporary, dataset_format=dataset_format,
+            percentages=percentages, seed=seed, method=method,
+            mask_source=mask_source, groups=groups,
+        )
+        os.replace(temporary, destination)
+    except (OSError, ValueError) as exc:
+        _fail(f'training dataset export failed: {exc}', code=1)
+    finally:
+        temporary.unlink(missing_ok=True)
+    counts = manifest['counts']
+    print(f'Training dataset written to: {destination}')
+    print(f"  {counts['train']} train / {counts['val']} validation / "
+          f"{counts['test']} test; {len(manifest['excluded'])} excluded.")
+    if manifest['conversion_notes']:
+        print(f"  {len(manifest['conversion_notes'])} conversion note(s) in manifest.json.")
 
 
 def _cmd_app(args):

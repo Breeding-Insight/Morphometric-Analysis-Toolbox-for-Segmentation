@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+import json
 import zipfile
 
 import pytest
@@ -1454,6 +1455,38 @@ def test_export_tab_explains_what_to_do_before_a_run():
     assert not app.exception
     assert any("Run an analysis" in item.value for item in app.info)
     assert "prepare_zip_export" not in {button.key for button in app.button}
+
+
+def test_export_tab_prepares_training_dataset_from_current_pairs(tmp_path):
+    results_path = tmp_path / "results.csv"
+    results_path.write_text("sample_id,area_cm2\nleaf,1\n")
+    image = np.full((16, 20, 3), 200, dtype=np.uint8)
+    mask = np.zeros((16, 20), dtype=np.uint8)
+    mask[3:13, 4:15] = 255
+    image_path = tmp_path / "leaf_target_box.png"
+    mask_path = tmp_path / "leaf_mask.png"
+    assert cv2.imwrite(str(image_path), image)
+    assert cv2.imwrite(str(mask_path), mask)
+    app = AppTest.from_file(str(HOME_PAGE))
+    app.session_state[WORKSPACE_TAB_KEY] = "Export"
+    app.session_state["last_run"] = _last_run(
+        {"threshold": results_path}, succeeded=1, failed=0, total=1,
+        artifacts=[{"path": str(results_path), "kind": "results_csv", "method": "threshold"}],
+    )
+    app.session_state["viewer_pairs"] = {"threshold": [{
+        "sample_id": "leaf", "target_box": str(image_path), "mask": str(mask_path),
+    }]}
+    app.run(timeout=30)
+    assert not app.exception
+    assert not app.button(key="prepare_training_dataset").disabled
+    app.button(key="prepare_training_dataset").click().run(timeout=30)
+    assert not app.exception
+    prepared = Path(app.session_state["dataset_zip_path"])
+    with zipfile.ZipFile(prepared) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["counts"] == {"train": 1, "val": 0, "test": 0}
+        assert archive.read(manifest["samples"][0]["label"])
+    assert any(button.key == "download_training_dataset" for button in app.download_button)
 
 
 def test_export_selection_filters_methods_and_missing_files(tmp_path):

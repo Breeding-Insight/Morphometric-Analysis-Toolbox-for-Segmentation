@@ -48,6 +48,80 @@ def test_run_defaults():
     assert ns.export == []
     assert ns.pre_cleanup_methods == "selected"
     assert not ns.no_target_boxes and not ns.no_masks and not ns.no_failure_log
+    assert ns.dataset_format is None
+
+
+def test_dataset_options_parse_and_validate(tmp_path, monkeypatch, capsys):
+    args = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"),
+        "--dataset-format", "yolo-seg", "--dataset-split", "60", "30", "10",
+        "--dataset-seed", "17", "--dataset-mask-source", "raw",
+    ])
+    assert args.dataset_format == "yolo-seg"
+    assert args.dataset_split == [60, 30, 10]
+    assert args.dataset_seed == 17
+    assert args.dataset_mask_source == "raw"
+
+    calls = []
+    _fake_core(monkeypatch, calls)
+    bad = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"),
+        "--dataset-format", "png", "--dataset-split", "70", "20", "9",
+    ])
+    with pytest.raises(SystemExit):
+        _cmd_run(bad)
+    assert "total 100" in capsys.readouterr().err
+    assert not calls
+
+
+def test_cli_dataset_uses_shared_pairing_and_exporter(tmp_path, monkeypatch):
+    calls = []
+    _fake_core(monkeypatch, calls)
+    fake_core = sys.modules["mats.core"]
+    image_path = tmp_path / "leaf_target_box.png"
+    mask_path = tmp_path / "leaf_mask.png"
+    image_path.write_bytes(b"image")
+    mask_path.write_bytes(b"mask")
+
+    def run_leaf_morpho_batch(**kwargs):
+        calls.append(kwargs)
+        return {
+            "succeeded": 1, "failed": 0, "workers": 1, "worker_reason": "test",
+            "methods": ("threshold",), "results_path": kwargs["results_path"],
+            "failure_report_path": None, "measurement_source": "cleaned",
+            "artifacts": [{
+                "path": str(mask_path), "sample_id": "leaf", "kind": "mask",
+                "method": "threshold",
+            }],
+            "preview_artifacts": [{
+                "path": str(image_path), "sample_id": "leaf", "kind": "preview_target_box",
+                "method": None,
+            }],
+        }
+
+    fake_core.run_leaf_morpho_batch = run_leaf_morpho_batch
+    exported = {}
+
+    def fake_write(pairs, dest, **options):
+        exported["pairs"] = pairs
+        exported["options"] = options
+        dest.write_bytes(b"zip")
+        return {"counts": {"train": 1, "val": 0, "test": 0},
+                "excluded": [], "conversion_notes": []}
+
+    monkeypatch.setattr("mats.dataset_export.write_dataset_zip", fake_write)
+    args = build_parser().parse_args([
+        "run", "-i", str(tmp_path), "-o", str(tmp_path / "out"),
+        "-t", "10x10cm", "--dataset-format", "png", "--no-target-boxes",
+        "--no-masks",
+    ])
+    assert _cmd_run(args) == 0
+    assert exported["pairs"] == [{
+        "sample_id": "leaf", "target_box": str(image_path), "mask": str(mask_path),
+    }]
+    assert exported["options"]["percentages"] == (70, 20, 10)
+    assert calls[0]["export_options"]["preview_dir"]
+    assert (tmp_path / "out" / "mats_training_threshold_png.zip").read_bytes() == b"zip"
 
 
 def test_repeated_exports_and_both_methods_parse():

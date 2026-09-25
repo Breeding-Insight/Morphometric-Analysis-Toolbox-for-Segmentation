@@ -405,7 +405,10 @@ with st.container(border=True):
     st.caption(
         "Export lists this run's saved files. Select Otsu, BiRefNet, or both; "
         "choose which files go in the ZIP; or download a results CSV directly. "
-        "Changing ZIP choices does not change measurements or create new images."
+        "Changing ZIP choices does not change measurements or create new images. "
+        "Training dataset builds a separate image-and-mask ZIP with configurable "
+        "train/validation/test splits (70/20/10 by default) in PNG-mask, YOLO, "
+        "or COCO format. Review the generated labels before model training."
     )
 
 # -------------------------------------------------------------- troubleshooting

@@ -163,6 +163,20 @@ After a run, **Go to Export** in the sidebar opens the Export tab.
    Results CSVs can also be downloaded individually. File types not saved during
    the run cannot be added to the ZIP; enable image output options in Setup
    before the next run if needed.
+   The **Training dataset** section creates a separate ZIP from the current
+   run's aligned target-box images and masks, including saved specimen
+   adjustments. Choose one segmentation method, the measured mask or an
+   available raw pre-cleanup mask, and image/PNG-mask, YOLO segmentation, YOLO
+   detection, or COCO segmentation format. Set train/validation/test percentages
+   (default 70/20/10; they must total 100) and a random seed. An optional UTF-8
+   CSV with `sample_id,group_id` columns keeps repeated photos of the same
+   plant or specimen in one split; group sizes can shift the exact percentages.
+   The ZIP contains `manifest.json` with actual counts, exclusions, and any
+   conversion notes. MATS generates these labels from its masks, so review
+   them before training. YOLO segmentation polygons cannot retain holes in
+   masks; COCO segmentation uses run-length masks that retain them. This export
+   uses current-session previews when regular image output was turned off, so
+   prepare it before ending the app session.
 
 Large batches (>200 images) ask for confirmation and run synchronously — keep
 the browser tab open until they finish.
