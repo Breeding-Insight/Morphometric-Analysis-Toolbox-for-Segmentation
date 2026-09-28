@@ -23,6 +23,7 @@ Hugging Face channel; the Git LFS channel needs no configuration beyond
 
 import hashlib
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -620,11 +621,29 @@ def _source_of(name, target):
     return "explicit path / checkout"
 
 
+def _python_env_label():
+    """Describe the environment MATS is installed in, for `mats doctor`.
+
+    A user-site or system install is where most first installs go wrong (the
+    console script lands off PATH, or the OS Python is too old), so name it.
+    """
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        return f"virtual environment ({sys.prefix})"
+    if (Path(sys.prefix) / "conda-meta").is_dir():
+        return f"conda environment ({sys.prefix})"
+    return "system/user Python -- a virtual environment is recommended"
+
+
 def doctor():
     """Print resolved paths, sources, devices and QR decoder availability."""
-    print("MATs environment check")
+    from . import __version__
+
+    print("MATS environment check")
     print("=" * 60)
 
+    print(f"MATS:               {__version__}")
+    print(f"python:             {platform.python_version()} ({sys.executable})")
+    print(f"environment:        {_python_env_label()}")
     print(f"weights dir:        {WEIGHTS_DIR}")
     print(f"HF weights repo:    {_HF_REPO_ID or '(not configured)'}")
     print(f"huggingface_hub:    {'ok' if _hf_available() else 'NOT installed'}")

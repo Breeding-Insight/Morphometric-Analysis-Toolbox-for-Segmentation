@@ -375,7 +375,9 @@ with st.container(border=True):
         "Measure from pre-cleanup masks in Setup to calculate area and extents after "
         "the edge margin and stray pieces are removed. A Clean size "
         "above 0 there also removes small specks and fills small holes before "
-        "measuring. Each results CSV has a `.meta.json` companion recording these "
+        "measuring. Checking it also exports the pre-cleanup masks. It suits "
+        "specimens that are not a single leaf, such as a vine or a cluster. Each "
+        "results CSV has a `.meta.json` companion recording these "
         "choices."
     )
     st.caption(

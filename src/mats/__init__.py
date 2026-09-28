@@ -1,8 +1,7 @@
-"""MATs -- field morphometric tools.
+"""MATS -- Morphometric Analysis Toolbox for Segmentation.
 
-A two-model pipeline (RF-DETR fiducial-marker detection + BiRefNet leaf
-segmentation) that turns a phone photo of leaves on a printed calibration
-template into per-leaf area, length and width in real-world units.
+RF-DETR fiducial-marker detection, perspective correction, and Otsu or optional
+BiRefNet segmentation turn template photographs into leaf measurements.
 
 Public entry points:
     mats run             batch-measure a folder of images

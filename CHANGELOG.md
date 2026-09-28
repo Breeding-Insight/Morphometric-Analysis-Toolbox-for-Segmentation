@@ -5,7 +5,41 @@ All notable changes to MATs are documented here. This project adheres to
 
 ## [Unreleased]
 
+### Release preparation
+- Corrected the software citation title and description, added the current
+  package version and the software authors (A.J. Ackerman, Tyr Wiesner-Hanks,
+  Edwin Reidel) to the citation and package metadata, and documented separate
+  citations for code and model weights.
+- Added `mats --version` and forwarded Streamlit options after `mats app`.
+- Results metadata now records MATS version, source filenames, calibration
+  input and successful per-image calibration, and the effective Otsu setting.
+- Added a SHA-256 manifest for both checkpoints and the packaged sample photos.
+- Raised the minimum Python version to 3.10. The pinned RF-DETR release
+  (`rfdetr==1.5.2`) requires Python ≥ 3.10, so installing on 3.9 always failed
+  while resolving dependencies; the package metadata, README, FAQ and CI now
+  agree on 3.10.
+- Added `docs/install.md`, a from-scratch install guide for computers with no
+  Python, Git, or package manager. It covers macOS, Windows, Linux, and
+  computers without administrator rights (Miniforge), lists supported
+  platforms, and has an error-message → fix table. Python 3.13 is now the
+  recommended version; the full sample pipeline was confirmed on Python 3.10,
+  3.12, and 3.13 with byte-identical results.
+- The README, FAQ, and agent instructions now install into a virtual
+  environment with `python -m pip`, which avoids a missing `pip`, user-site
+  installs that leave `mats` off `PATH`, and `externally-managed-environment`
+  errors.
+- `mats doctor` now reports the MATS version, the Python version and
+  interpreter, and whether it is running in a virtual environment, a conda
+  environment, or a system Python.
+- `mats app` no longer stops at Streamlit's first-run "Email:" terminal prompt.
+- Added `GEMINI.md`, which imports `AGENTS.md` so Gemini CLI picks up the
+  project's agent instructions; by default Gemini reads only `GEMINI.md`.
+
 ### Changed
+- In the app, checking **Measure from pre-cleanup masks** now also checks
+  and locks the **Pre-cleanup masks** image export, and its help suggests it
+  for specimens that are not a single leaf, such as a vine or a cluster. The
+  CLI is unchanged.
 - Adjust now lists specimens in a searchable measurement table with sortable
   columns. Clicking a row (its **View** button) previews that specimen; for Otsu
   runs, ticking **Marked for Adjustment** marks it, and marks persist across

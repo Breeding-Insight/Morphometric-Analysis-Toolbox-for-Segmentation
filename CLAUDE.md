@@ -18,7 +18,9 @@ file enters the context window, so notes here cost nothing.
 
 - Run `pytest` before proposing code changes — the suite is offline and takes
   seconds. Do not add a module-level torch/streamlit import to a path it covers.
-- Diagnose environment problems with `mats doctor` before reading code.
+- Diagnose environment problems with `mats doctor` before reading code — or,
+  before MATS is installed, with the preflight in AGENTS.md ("Assume nothing is
+  installed").
 - `README.md` and `docs/` are user-facing and public: no internal planning,
   unpublished results, or private paths belong in them.
 - Never commit checkpoints (`*.pth`, `*.pt`) or a user's images.

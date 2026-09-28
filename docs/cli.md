@@ -1,12 +1,13 @@
 # CLI reference
 
-MATs installs a single `mats` command with four subcommands:
+MATS installs a single `mats` command with four subcommands:
 
 ```
 mats run             Batch-measure a folder of images (the default).
 mats app             Launch the Streamlit GUI.
 mats fetch-weights   Download the model checkpoints.
 mats doctor          Report weights, devices and QR decoders.
+mats --version       Print the installed MATS version.
 ```
 
 `mats -i IN -o OUT ...` with no subcommand is treated as `mats run -i IN -o OUT ...`.
@@ -106,8 +107,10 @@ mats run -i ./images -o ./out -r results.csv --sheet-dimensions 12x12in \
 Without this flag, measurements use the cleaned mask as before. This setting is
 independent of `--export pre-cleanup`, which writes the raw mask exactly as
 segmented, stray pieces included. Each results CSV has a `.meta.json` companion
-recording its measurement source, segmentation method, unit, and schema, plus
-the clean margin, stray gap, and clean size for pre-cleanup runs.
+recording the MATS version, source filenames, calibration input and successful
+per-image calibration, segmentation method, unit, and schema. It records the
+effective Otsu mode/cutoff where used, plus clean margin, stray gap, and clean
+size for pre-cleanup runs.
 
 `--mask-method both` detects markers once per image and then measures it with
 Otsu and with BiRefNet. Each method gets its own results CSV and failure log,

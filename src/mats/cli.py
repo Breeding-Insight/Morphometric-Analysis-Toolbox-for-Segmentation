@@ -75,10 +75,13 @@ class _TrackProvided(argparse.Action):
 
 def build_parser():
     """Build the top-level argument parser."""
+    from . import __version__
+
     parser = argparse.ArgumentParser(
         prog="mats",
-        description="MATs -- field morphometric tools: leaf image -> measurements.",
+        description="MATS -- leaf images to physical measurements.",
     )
+    parser.add_argument('--version', action='version', version=f'MATS {__version__}')
     sub = parser.add_subparsers(dest="command")
 
     run = sub.add_parser(
@@ -214,7 +217,7 @@ def _normalize_argv(argv):
     if not argv:
         return argv
     first = argv[0]
-    if first in _SUBCOMMANDS or first in ('-h', '--help'):
+    if first in _SUBCOMMANDS or first in ('-h', '--help', '--version'):
         return argv
     return [_RUN_SUBCOMMAND] + argv
 
@@ -468,6 +471,10 @@ def _cmd_run(args):
             output_dir=output_dir,
             results_path=results_path,
             template_dimensions=template_dims,
+            printed_sheet_dimensions=(
+                lm.parse_template_dimensions(args.sheet_dimensions)
+                if args.sheet_dimensions is not None else None
+            ),
             output_mode=args.output_mode,
             mask_method=args.mask_method,
             threshold_value=threshold_value,
@@ -591,7 +598,14 @@ _DISPATCH = {
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-    args = parser.parse_args(_normalize_argv(argv))
+    normalized = _normalize_argv(argv)
+    if normalized and normalized[0] == 'app' and len(normalized) > 1 and normalized[1] not in ('-h', '--help'):
+        # Streamlit owns its flags. argparse does not reliably accept unknown
+        # options after a REMAINDER positional, so hand the tail to the app.
+        args = parser.parse_args(['app'])
+        args.extra = normalized[2:] if normalized[1] == '--' else normalized[1:]
+    else:
+        args = parser.parse_args(normalized)
     if not args.command:
         parser.print_help()
         return 1

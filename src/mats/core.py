@@ -9,6 +9,7 @@ import threading
 from itertools import combinations
 import concurrent.futures
 from pathlib import Path
+from . import __version__
 
 # Some ops (e.g. antialiased bicubic upsampling in RF-DETR preprocessing) are not
 # yet implemented for Apple's MPS backend. Enabling this fallback runs only those
@@ -930,6 +931,10 @@ def leaf_morpho(
     device_override = "cpu" if execution_device == "cpu" else None
     if physical_dimensions is not None:
         template_dimensions = physical_dimensions
+    calibration = (
+        {"source": "provided", "dimensions": list(template_dimensions)}
+        if template_dimensions is not None else None
+    )
     is_target_box_input = is_target_box_image(input_image)
     if is_target_box_input:
         file_name = target_box_sample_id(input_image)
@@ -1077,6 +1082,8 @@ def leaf_morpho(
             'artifacts': artifacts,
             'preview_artifacts': preview_artifacts,
         }
+        if calibration is not None:
+            result['calibration'] = calibration
         combined_warnings = _combined_warnings(extra_warnings)
         if combined_warnings:
             result['warnings'] = combined_warnings
@@ -1210,6 +1217,12 @@ def leaf_morpho(
                     # Find units encoded in the QR payload (in or cm). This matters for px/cm scaling.
                     unit_m = re.search(r'(in|cm)', decoded_info)
                     unit = unit_m.group(1) if unit_m else None
+
+                    if qr_parse_ok and unit is not None:
+                        calibration = {
+                            "source": "qr",
+                            "dimensions": [width, height, unit],
+                        }
 
                     if not qr_parse_ok:
                         qr_points = None
@@ -1365,6 +1378,7 @@ def run_leaf_morpho_batch(
     stray_gap=STRAY_GAP_DEFAULT,
     clean_margin=CLEAN_MARGIN_DEFAULT,
     clean_size=CLEAN_SIZE_DEFAULT,
+    printed_sheet_dimensions=None,
 ):
     """Run the leaf morphometrics pipeline with per-image error isolation.
 
@@ -1392,6 +1406,8 @@ def run_leaf_morpho_batch(
     (``mask_cleanup.raw_measurement_mask``).
     """
     input_images = list(input_images or [])
+    if printed_sheet_dimensions is not None and template_dimensions is None:
+        raise ValueError("printed_sheet_dimensions requires derived template_dimensions")
     if measurement_source not in ("cleaned", "pre-cleanup"):
         raise ValueError("measurement_source must be 'cleaned' or 'pre-cleanup'")
     stray_gap = checked_stray_gap(stray_gap)
@@ -1484,6 +1500,7 @@ def run_leaf_morpho_batch(
             "failed": 0,
             "failure_rows": [],
             "result_rows": [],
+            "calibration_by_sample": {},
             "results_path": (
                 method_suffixed_path(results_path, method)
                 if multi and results_path else results_path
@@ -1515,6 +1532,8 @@ def run_leaf_morpho_batch(
             return False
         if result and result.get("result_row"):
             tally["result_rows"].append(result["result_row"])
+            if result.get("calibration") is not None:
+                tally["calibration_by_sample"][result["sample_id"]] = result["calibration"]
             if result.get("status") == "ok":
                 tally["succeeded"] += 1
                 tally["failure_rows"].extend(warning_report_rows(input_image, result))
@@ -1618,11 +1637,28 @@ def run_leaf_morpho_batch(
                               "kind": "results_csv", "method": method})
             metadata_path = f"{tally['results_path']}.meta.json"
             metadata = {
+                "mats_version": __version__,
                 "measurement_source": measurement_source,
                 "mask_method": method,
                 "results_unit": results_unit,
                 "csv_schema": "compact" if compact_csv else "full",
+                "source_images": {
+                    sample_id: os.path.basename(path)
+                    for sample_id, path in zip(sample_ids, input_images)
+                },
+                "calibration_input": (
+                    {"source": "printed_sheet", "dimensions": list(printed_sheet_dimensions)}
+                    if printed_sheet_dimensions is not None else
+                    {"source": "provided_calibration_area", "dimensions": list(template_dimensions)}
+                    if template_dimensions is not None else {"source": "qr"}
+                ),
+                "calibration_by_sample": tally["calibration_by_sample"],
             }
+            if output_mode == "masks" and (
+                method == "threshold" or "threshold" in options["pre_cleanup_methods"]
+            ):
+                metadata["threshold_value"] = threshold_value
+                metadata["threshold_mode"] = "otsu" if threshold_value is None else "fixed"
             if measurement_source == "pre-cleanup":
                 metadata["clean_margin"] = clean_margin
                 metadata["stray_gap"] = stray_gap

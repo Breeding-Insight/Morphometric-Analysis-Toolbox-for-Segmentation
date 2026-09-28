@@ -7,9 +7,13 @@ name = "mats-morpho"
 version = "1.0.0"
 description = "Field morphometric tools: RF-DETR marker detection + BiRefNet leaf segmentation from photos of a printed calibration template."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { file = "LICENSE" }
-authors = [{ name = "A.J. Ackerman" }]
+authors = [
+    { name = "A.J. Ackerman" },
+    { name = "Tyr Wiesner-Hanks" },
+    { name = "Edwin Reidel" },
+]
 keywords = ["plant phenomics", "morphometrics", "leaf area", "segmentation", "RF-DETR", "BiRefNet"]
 classifiers = [
     "Programming Language :: Python :: 3",

@@ -466,6 +466,25 @@ def test_cleanup_settings_are_grayed_out_unless_measuring_pre_cleanup():
     assert app.session_state["diagnostics_context"]["clean_size"] == 0
 
 
+def test_measuring_pre_cleanup_checks_and_locks_the_pre_cleanup_export():
+    app = AppTest.from_file(str(HOME_PAGE)).run(timeout=30)
+    export = app.checkbox(key="export_pre_cleanup")
+    assert not export.value and not export.disabled
+
+    app.checkbox(key="measure_pre_cleanup").set_value(True).run(timeout=30)
+    assert not app.exception
+    export = app.checkbox(key="export_pre_cleanup")
+    assert export.value and export.disabled
+    export_options = app.session_state["diagnostics_context"]["export_options"]
+    assert export_options["pre_cleanup_methods"] == ("threshold",)
+
+    # Unchecking measure unlocks the export and leaves it checked.
+    app.checkbox(key="measure_pre_cleanup").set_value(False).run(timeout=30)
+    assert not app.exception
+    export = app.checkbox(key="export_pre_cleanup")
+    assert export.value and not export.disabled
+
+
 def _custom_threshold_sliders(app):
     return [slider for slider in app.slider if slider.key == THRESHOLD_CUSTOM_VALUE_KEY]
 

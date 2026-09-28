@@ -197,6 +197,31 @@ def test_doctor_ok_when_only_rf_detr_present(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "MISSING" not in out
     assert "not fetched (optional" in out
+    import mats
+    import platform
+    assert f"MATS:               {mats.__version__}" in out
+    assert f"python:             {platform.python_version()}" in out
+    assert "environment:" in out
+
+
+@pytest.mark.parametrize("kind", ["venv", "conda", "system"])
+def test_python_env_label(monkeypatch, tmp_path, kind):
+    import sys
+    from mats import weights
+
+    prefix = tmp_path / "env"
+    prefix.mkdir()
+    monkeypatch.setattr(sys, "prefix", str(prefix))
+    monkeypatch.setattr(sys, "base_prefix", str(prefix) if kind != "venv" else "/base")
+    if kind == "conda":
+        (prefix / "conda-meta").mkdir()
+    label = weights._python_env_label()
+    expected = {
+        "venv": "virtual environment",
+        "conda": "conda environment",
+        "system": "a virtual environment is recommended",
+    }[kind]
+    assert expected in label
 
 
 def test_doctor_fails_when_rf_detr_missing(monkeypatch, tmp_path, capsys):

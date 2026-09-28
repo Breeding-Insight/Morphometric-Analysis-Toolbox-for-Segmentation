@@ -8,6 +8,7 @@ import pytest
 
 np = pytest.importorskip("numpy")
 cv2 = pytest.importorskip("cv2")
+import mats
 from mats import core
 
 
@@ -161,10 +162,20 @@ def test_pre_cleanup_measurement_keeps_holes_and_nearby_specks(tmp_path):
     assert raw_row["width_cm"] > clean_row["width_cm"]  # detached speck extends width
     assert raw_row["length_cm"] > clean_row["length_cm"]
     assert json.loads((tmp_path / "raw" / "results.csv.meta.json").read_text()) == {
+        "mats_version": mats.__version__,
         "measurement_source": "pre-cleanup",
         "mask_method": "threshold",
         "results_unit": "cm",
         "csv_schema": "full",
+        "source_images": {"leaf": "leaf_target_box.png"},
+        "calibration_input": {
+            "source": "provided_calibration_area", "dimensions": [10, 10, "cm"],
+        },
+        "calibration_by_sample": {
+            "leaf": {"source": "provided", "dimensions": [10, 10, "cm"]},
+        },
+        "threshold_value": None,
+        "threshold_mode": "otsu",
         "clean_margin": 1.0,
         "stray_gap": 0.25,
         "clean_size": 0,
@@ -178,6 +189,25 @@ def test_pre_cleanup_measurement_keeps_holes_and_nearby_specks(tmp_path):
         cv2.imread(str(tmp_path / "raw" / "leaf_measurement_axes.jpg")),
         cv2.imread(str(tmp_path / "cleaned" / "leaf_measurement_axes.jpg")),
     )
+
+
+def test_metadata_distinguishes_printed_sheet_from_calibration_area(tmp_path):
+    source = _input(tmp_path)
+    output = tmp_path / "sheet"
+    core.run_leaf_morpho_batch(
+        [str(source)], str(output), str(output / "results.csv"),
+        template_dimensions=(10, 9.5, "in"),
+        printed_sheet_dimensions=(12, 12, "in"),
+        threshold_value=140, workers=1,
+    )
+    metadata = json.loads((output / "results.csv.meta.json").read_text())
+    assert metadata["calibration_input"] == {
+        "source": "printed_sheet", "dimensions": [12, 12, "in"],
+    }
+    assert metadata["calibration_by_sample"]["leaf"] == {
+        "source": "provided", "dimensions": [10, 9.5, "in"],
+    }
+    assert (metadata["threshold_mode"], metadata["threshold_value"]) == ("fixed", 140)
 
 
 def _stray_input(tmp_path):

@@ -49,7 +49,10 @@ After a run, **Go to Export** in the sidebar opens the Export tab.
    `low`/`medium`/`high` presets, or **custom**, which shows a 1–255 slider with
    the presets marked on it.
 4. Choose **output options**: optionally check **Measure from pre-cleanup masks**
-   to use the raw binary segmentation for area, width, and length. Raw mode
+   to use the raw binary segmentation for area, width, and length. It is
+   suggested when the specimen is not a single leaf, such as a vine or a
+   cluster: cleanup keeps only the largest piece and fills its outline, which
+   drops separate parts and counts the gaps between them as area. Raw mode
    first clears **Edge margin**, a band along every edge of the target box
    (default 1% of its shorter side), where the template's printed box outline
    lands. It then keeps the leaf (the largest object) and drops pieces that
@@ -62,8 +65,9 @@ After a run, **Go to Export** in the sidebar opens the Export tab.
    Lay leaves inside the printed box, since any part of a leaf within the
    margin is cleared too. All three settings are grayed out unless the box is
    checked. The default uses the cleaned mask.
-   This choice is separate from exporting pre-cleanup mask images, which keep
-   every piece. Choose result
+   Checking it also checks **Pre-cleanup masks** in **Image output options**
+   and locks it on, so the raw mask behind each measurement is saved; that
+   export is still the raw mask with every piece. Choose result
    units in **mm**, **cm**, or **in** (separate from the printed-sheet calibration
    unit), then pick the **Full research schema** CSV for area/width/length plus per-axis
    pixels-per-selected-unit and a `scale_aspect_ratio` QC column, or **Compact** for a
@@ -137,8 +141,9 @@ After a run, **Go to Export** in the sidebar opens the Export tab.
    records the clean size with the cutoff in the `.meta.json`; in a
    cleaned-mask run, Clean image then replaces MATS cleanup (and Remove
    flashfill) in the saved mask. BiRefNet adjustments remain preview-only.
-   Each results CSV has a `.meta.json` companion recording which measurement
-   source was used and any per-sample threshold adjustments.
+   Each results CSV has a `.meta.json` companion recording the MATS version,
+   source filenames, calibration input and successful per-image calibration,
+   measurement settings, and any per-sample threshold adjustments.
 5. **CPU Options** retains the worker controls. The app detects the CPU workers assigned to it (including HPC
    scheduler limits). One worker uses CUDA/MPS when available. Selecting two or
    more workers enables parallel CPU processing and disables CUDA/MPS for that

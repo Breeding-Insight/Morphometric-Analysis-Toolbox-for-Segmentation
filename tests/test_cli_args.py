@@ -27,8 +27,31 @@ def test_default_subcommand_inserted():
 
 def test_explicit_subcommands_untouched():
     for argv in (["run", "-i", "x"], ["doctor"], ["fetch-weights", "--only", "rf-detr"],
-                 ["app", "--server.port", "8502"], ["-h"], ["--help"]):
+                 ["app", "--server.port", "8502"], ["-h"], ["--help"],
+                 ["--version"]):
         assert _normalize_argv(argv) == argv
+
+
+def test_top_level_version(capsys):
+    from mats import __version__
+    from mats.cli import main
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--version"])
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == f"MATS {__version__}"
+
+
+def test_app_forwards_streamlit_options(monkeypatch):
+    from mats.cli import main
+
+    forwarded = []
+    monkeypatch.setattr('mats.app.launcher.launch', lambda args: forwarded.append(args) or 0)
+    assert main(['app', '--server.port', '18517']) == 0
+    assert main(['app', '--', '--server.headless', 'true']) == 0
+    assert forwarded == [
+        ['--server.port', '18517'], ['--server.headless', 'true'],
+    ]
 
 
 def test_run_defaults():

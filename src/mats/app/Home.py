@@ -1035,10 +1035,14 @@ def render_analysis_settings(lm):
             key=MEASURE_PRE_CLEANUP_KEY,
             help=(
                 "Measure the raw binary segmentation before gap closing and hole "
-                "filling. The edge margin is cleared, the largest object is the "
-                "leaf, and pieces touching the margin or beyond the stray-piece "
-                "distance are dropped. Specks near the leaf still count toward "
-                "area, width, and length."
+                "filling. Suggested when the specimen is not a single leaf, such as "
+                "a vine or a cluster: cleanup keeps only the largest piece and fills "
+                "its outline, so separate parts would be dropped and the gaps "
+                "between them counted as area. The edge margin is cleared, the "
+                "largest object is kept, and pieces touching the margin or beyond "
+                "the stray-piece distance are dropped. Specks near it still count "
+                "toward area, width, and length. Also writes the pre-cleanup mask "
+                "images."
             ),
             persist_state="page",
         )
@@ -1131,10 +1135,15 @@ def render_analysis_settings(lm):
                     persist_state="page")
         st.checkbox("Cleaned leaf masks · {id}_mask.png", key=EXPORT_MASKS_KEY,
                     persist_state="page")
+        # Measurements from pre-cleanup masks always ship with those masks.
+        if measure_pre_cleanup:
+            st.session_state[EXPORT_PRE_CLEANUP_KEY] = True
         st.checkbox("Pre-cleanup masks · {id}_mask_precleanup_{method}.png",
                     key=EXPORT_PRE_CLEANUP_KEY, persist_state="page",
+                    disabled=measure_pre_cleanup,
                     help="One per selected segmentation method. Pre-cleanup masks keep "
-                         "holes, specks, and small objects.")
+                         "holes, specks, and small objects. Always written when "
+                         "measuring from pre-cleanup masks.")
         st.checkbox("Overlays · {id}_overlay.jpg", key=EXPORT_OVERLAY_KEY, persist_state="page")
         st.checkbox("Cutouts · {id}_cutout.jpg", key=EXPORT_CUTOUT_KEY, persist_state="page")
         st.checkbox("Measurement axes · {id}_measurement_axes.jpg", key=EXPORT_AXES_KEY,
@@ -1206,7 +1215,9 @@ def current_analysis_config(lm):
             "target_boxes": st.session_state[EXPORT_TARGET_BOXES_KEY],
             "cleaned_masks": st.session_state[EXPORT_MASKS_KEY],
             "pre_cleanup_methods": (
-                mask_methods if st.session_state[EXPORT_PRE_CLEANUP_KEY] else ()
+                mask_methods
+                if st.session_state[EXPORT_PRE_CLEANUP_KEY]
+                or st.session_state[MEASURE_PRE_CLEANUP_KEY] else ()
             ),
             "overlay": st.session_state[EXPORT_OVERLAY_KEY],
             "cutout": st.session_state[EXPORT_CUTOUT_KEY],
@@ -1711,6 +1722,7 @@ def execute_leaf_analysis(
                     str(output_path),
                     str(results_path),
                     template_dimensions=config["template_dimensions"],
+                    printed_sheet_dimensions=config["sheet_dimensions"],
                     output_mode="masks",
                     mask_method=config["mask_methods"],
                     threshold_value=config["threshold_value"],
