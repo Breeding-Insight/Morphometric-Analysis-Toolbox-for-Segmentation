@@ -379,8 +379,8 @@ def _png_data_url(image):
 
 
 @st.cache_data(max_entries=8, show_spinner=False)
-def grayscale_sample(path):
-    """Return exact OpenCV grayscale pixels and the sample's Otsu cutoff."""
+def grayscale_sample(path, mtime_ns):
+    """Return grayscale pixels and Otsu cutoff; ``mtime_ns`` keys the cache."""
     target = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if target is None:
         raise ValueError(f"Could not read sample target box: {Path(path).name}")
@@ -392,8 +392,8 @@ def grayscale_sample(path):
 
 
 @st.cache_data(max_entries=8, show_spinner=False)
-def color_sample(path):
-    """Return the sample's color target box for the masked-leaf preview panel."""
+def color_sample(path, mtime_ns):
+    """Return the color target box; ``mtime_ns`` keys the cache."""
     target = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if target is None:
         raise ValueError(f"Could not read sample target box: {Path(path).name}")
@@ -406,7 +406,8 @@ def color_sample(path):
 
 
 @st.cache_data(max_entries=8, show_spinner=False)
-def cleaned_sample(path, cutoff, *, fill_holes=True, clean_margin=CLEAN_MARGIN_DEFAULT):
+def cleaned_sample(path, mtime_ns, cutoff, *, fill_holes=True,
+                   clean_margin=CLEAN_MARGIN_DEFAULT):
     """Run the production mask cleanup on just the selected threshold sample.
 
     ``fill_holes=False`` is Remove flashfill, which clears the edge margin first.
@@ -423,8 +424,8 @@ def cleaned_sample(path, cutoff, *, fill_holes=True, clean_margin=CLEAN_MARGIN_D
 
 
 @st.cache_data(max_entries=8, show_spinner=False)
-def unfilled_sample(raw_mask_path, clean_margin=CLEAN_MARGIN_DEFAULT):
-    """Keep the largest raw component, past the edge margin, without filling holes."""
+def unfilled_sample(raw_mask_path, mtime_ns, clean_margin=CLEAN_MARGIN_DEFAULT):
+    """Keep the largest raw component past the edge margin; key by ``mtime_ns``."""
     from mats import core
 
     raw = cv2.imread(str(raw_mask_path), cv2.IMREAD_GRAYSCALE)
@@ -434,7 +435,7 @@ def unfilled_sample(raw_mask_path, clean_margin=CLEAN_MARGIN_DEFAULT):
 
 
 @st.cache_data(max_entries=8, show_spinner=False)
-def pre_cleanup_sample(path, cutoff, clean_margin=CLEAN_MARGIN_DEFAULT,
+def pre_cleanup_sample(path, mtime_ns, cutoff, clean_margin=CLEAN_MARGIN_DEFAULT,
                        stray_gap=STRAY_GAP_DEFAULT):
     """The pre-cleanup measurement mask for one cutoff (``clean_raw_mask``)."""
     from mats import core
@@ -452,7 +453,7 @@ def _levels_data_url(levels):
 
 
 @st.cache_data(max_entries=8, show_spinner=False)
-def clean_levels_for_threshold(path, cutoff, stray_gap=STRAY_GAP_DEFAULT,
+def clean_levels_for_threshold(path, mtime_ns, cutoff, stray_gap=STRAY_GAP_DEFAULT,
                                clean_margin=CLEAN_MARGIN_DEFAULT):
     """Speck and hole sizes of the raw threshold mask, for the clean slider."""
     from mats import core

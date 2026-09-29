@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 import json
+import os
 import zipfile
 
 import pytest
@@ -1138,6 +1139,44 @@ def test_adjust_table_has_no_marking_for_birefnet():
     ]
 
 
+def test_threshold_preview_refreshes_when_target_path_is_reused(tmp_path):
+    results_path = tmp_path / "results.csv"
+    results_path.write_text("sample_id,area_cm2,width_cm,length_cm\nleaf_1,4.0,2.0,2.0\n")
+    target = tmp_path / "leaf_1_preview_target_box.png"
+    first = np.full((40, 40, 3), 255, dtype=np.uint8)
+    first[5:20, 5:20] = 40
+    second = np.full((40, 40, 3), 255, dtype=np.uint8)
+    second[20:35, 20:35] = 60
+    assert cv2.imwrite(str(target), first)
+
+    app = AppTest.from_file(str(HOME_PAGE))
+    app.session_state[WORKSPACE_TAB_KEY] = "Adjust"
+    app.session_state["last_run"] = _last_run(
+        {"threshold": results_path}, succeeded=1, failed=0, total=1,
+        run_id="reused-target", threshold_value=125, measurement_source="cleaned",
+    )
+    app.session_state["viewer_pairs"] = {"threshold": [{
+        "sample_id": "leaf_1", "target_box": str(target), "mask": None,
+    }]}
+    selected = SimpleNamespace(selection=SimpleNamespace(rows=[0]))
+    mounted = []
+    with patch("streamlit.dataframe", return_value=selected), patch(
+        "mats.app.threshold_preview.show_threshold_preview",
+        side_effect=lambda **kwargs: mounted.append(kwargs),
+    ):
+        app.run(timeout=30)
+        before = mounted[-1]
+        previous_mtime_ns = target.stat().st_mtime_ns
+        assert cv2.imwrite(str(target), second)
+        os.utime(target, ns=(previous_mtime_ns + 1_000_000_000,) * 2)
+        app.run(timeout=30)
+        after = mounted[-1]
+
+    assert not app.exception
+    for key in ("grayscale_image", "color_image", "cleaned_image", "clean_levels_image"):
+        assert before[key] != after[key]
+
+
 def test_clean_image_preview_is_saved_by_overwrite(tmp_path):
     results_path = tmp_path / "results.csv"
     results_path.write_text("sample_id,area_cm2,width_cm,length_cm\nleaf_1,4.0,2.0,2.0\n")
@@ -1506,6 +1545,45 @@ def test_export_tab_prepares_training_dataset_from_current_pairs(tmp_path):
         assert manifest["counts"] == {"train": 1, "val": 0, "test": 0}
         assert archive.read(manifest["samples"][0]["label"])
     assert any(button.key == "download_training_dataset" for button in app.download_button)
+
+
+@pytest.mark.parametrize("unknown_id", [False, True])
+def test_dataset_groups_allow_failed_inputs_but_reject_unknown_ids(tmp_path, unknown_id):
+    results_path = tmp_path / "results.csv"
+    results_path.write_text("sample_id,area_cm2\nleaf,1\n")
+    image = np.full((16, 20, 3), 200, dtype=np.uint8)
+    mask = np.zeros((16, 20), dtype=np.uint8)
+    mask[3:13, 4:15] = 255
+    image_path = tmp_path / "leaf_target_box.png"
+    mask_path = tmp_path / "leaf_mask.png"
+    assert cv2.imwrite(str(image_path), image)
+    assert cv2.imwrite(str(mask_path), mask)
+    app = AppTest.from_file(str(HOME_PAGE))
+    app.session_state[WORKSPACE_TAB_KEY] = "Export"
+    app.session_state["last_run"] = _last_run(
+        {"threshold": results_path}, succeeded=1, failed=1, total=2,
+        input_sample_ids=("leaf", "failed"),
+        artifacts=[{"path": str(results_path), "kind": "results_csv", "method": "threshold"}],
+    )
+    app.session_state["viewer_pairs"] = {"threshold": [{
+        "sample_id": "leaf", "target_box": str(image_path), "mask": str(mask_path),
+    }]}
+    second_id = "stranger" if unknown_id else "failed"
+    groups = {"leaf": "plant_a", second_id: "plant_b"}
+    with patch("mats.dataset_export.read_group_csv", return_value=groups):
+        app.run(timeout=30)
+        assert not app.exception
+        if unknown_id:
+            assert app.button(key="prepare_training_dataset").disabled
+            assert any("unknown sample IDs: stranger" in item.value for item in app.error)
+        else:
+            assert not app.button(key="prepare_training_dataset").disabled
+            app.button(key="prepare_training_dataset").click().run(timeout=30)
+            assert not app.exception
+            with zipfile.ZipFile(app.session_state["dataset_zip_path"]) as archive:
+                manifest = json.loads(archive.read("manifest.json"))
+            assert [sample["sample_id"] for sample in manifest["samples"]] == ["leaf"]
+            assert manifest["samples"][0]["group_id"] == "plant_a"
 
 
 def test_export_selection_filters_methods_and_missing_files(tmp_path):

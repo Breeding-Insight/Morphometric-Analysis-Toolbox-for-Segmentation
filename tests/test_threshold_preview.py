@@ -26,7 +26,7 @@ def test_grayscale_preview_uses_exact_pipeline_pixels_and_otsu_cutoff(tmp_path):
     path = tmp_path / "sample.png"
     assert cv2.imwrite(str(path), image)
 
-    data_url, cutoff = grayscale_sample(str(path))
+    data_url, cutoff = grayscale_sample(str(path), path.stat().st_mtime_ns)
     expected_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     expected_cutoff, _ = cv2.threshold(
         expected_gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU
@@ -41,7 +41,7 @@ def test_color_preview_matches_the_target_box_geometry_and_colors(tmp_path):
     path = tmp_path / "sample.png"
     assert cv2.imwrite(str(path), image)
 
-    url = color_sample(str(path))
+    url = color_sample(str(path), path.stat().st_mtime_ns)
     assert url.startswith("data:image/jpeg;base64,")
     decoded = cv2.imdecode(
         np.frombuffer(base64.b64decode(url.split(",", 1)[1]), dtype=np.uint8),
@@ -100,7 +100,7 @@ def test_settled_cleaned_preview_uses_production_mask_cleanup(tmp_path):
     path = tmp_path / "sample.png"
     assert cv2.imwrite(str(path), image)
 
-    preview = _decode_png(cleaned_sample(str(path), 125))
+    preview = _decode_png(cleaned_sample(str(path), path.stat().st_mtime_ns, 125))
     expected = core.clean_leaf_mask(core.threshold_mask(image, 125))
     assert np.array_equal(preview, expected)
 
@@ -117,7 +117,7 @@ def test_remove_flashfill_preserves_holes_but_keeps_other_cleanup(tmp_path):
     path = tmp_path / "raw.png"
     assert cv2.imwrite(str(path), raw)
 
-    preview = _decode_png(unfilled_sample(str(path)))
+    preview = _decode_png(unfilled_sample(str(path), path.stat().st_mtime_ns))
     cleaned = core.clean_leaf_mask(raw)
     assert preview[50, 50] == 0 and cleaned[50, 50] == 255
     assert preview[6, 6] == 0  # The detached speck is still removed.
@@ -129,7 +129,7 @@ def test_otsu_zero_cutoff_can_be_previewed(tmp_path):
     image[5:15, 5:15] = 0
     path = tmp_path / "binary_sample.png"
     assert cv2.imwrite(str(path), image)
-    _, cutoff = grayscale_sample(str(path))
+    _, cutoff = grayscale_sample(str(path), path.stat().st_mtime_ns)
     assert cutoff == 0
 
 
@@ -149,7 +149,7 @@ def test_pre_cleanup_preview_is_the_measured_mask(tmp_path):
     from mats import core
 
     path, image = _framed_target(tmp_path)
-    settled = _decode_png(pre_cleanup_sample(str(path), 125, 1.0, 0.25))
+    settled = _decode_png(pre_cleanup_sample(str(path), path.stat().st_mtime_ns, 125, 1.0, 0.25))
     expected = clean_raw_mask(core.threshold_mask(image, 125), 1.0, 0.25)
     assert np.array_equal(settled, expected)
     assert not settled[:4].any() and settled[200, 200] == 255
@@ -166,6 +166,10 @@ def test_remove_flashfill_previews_clear_the_edge_margin(tmp_path):
     assert cv2.imwrite(str(raw_path), raw)
     only_leaf = np.zeros((400, 400), dtype=np.uint8)
     only_leaf[190:210, 190:210] = 255
-    assert np.array_equal(_decode_png(unfilled_sample(str(raw_path), 1.0)), only_leaf)
-    unfilled = cleaned_sample(str(path), 125, fill_holes=False, clean_margin=1.0)
+    assert np.array_equal(_decode_png(unfilled_sample(
+        str(raw_path), raw_path.stat().st_mtime_ns, 1.0,
+    )), only_leaf)
+    unfilled = cleaned_sample(
+        str(path), path.stat().st_mtime_ns, 125, fill_holes=False, clean_margin=1.0,
+    )
     assert np.array_equal(_decode_png(unfilled), only_leaf)

@@ -39,5 +39,5 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --no-deps -e .
           python -m pip install pytest numpy opencv-python-headless
-      - name: Run pre-cleanup integration tests
-        run: python -m pytest tests/test_pre_cleanup_exports.py -q -rs
+      - name: Run image integration tests
+        run: python -m pytest tests/test_pre_cleanup_exports.py tests/test_mask_cleanup.py tests/test_dataset_export.py -q -rs

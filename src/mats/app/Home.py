@@ -1686,7 +1686,7 @@ def execute_leaf_analysis(
     break_glass_is_unlocked,
     birefnet_parallel_is_unlocked,
 ):
-    """Run the batch and return its summary plus output artifacts for this session."""
+    """Run the batch and return its summary, output pairs, and input sample IDs."""
     output_path.mkdir(parents=True, exist_ok=True)
     preview_cache = tempfile.TemporaryDirectory(prefix="mats_preview_")
     if worker_risk.requires_break_glass:
@@ -1701,6 +1701,11 @@ def execute_leaf_analysis(
     with tempfile.TemporaryDirectory(prefix="leaf_morpho_uploads_") as tmpdir:
         if input_source == "Upload images":
             image_paths = save_uploaded_images(uploaded_files, Path(tmpdir))
+        input_sample_ids = tuple(
+            lm.target_box_sample_id(path) if lm.is_target_box_image(path)
+            else Path(path).stem
+            for path in image_paths
+        )
 
         progress_bar = st.progress(0)
         status_box = st.empty()
@@ -1745,7 +1750,7 @@ def execute_leaf_analysis(
         except ValueError as exc:
             preview_cache.cleanup()
             st.error(f"Run prevented by worker safety checks: {exc}")
-            return None, {}
+            return None, {}, ()
 
     input_images = image_paths if input_source == "Local folder" else ()
     run_pairs = {
@@ -1760,7 +1765,7 @@ def execute_leaf_analysis(
     st.session_state["preview_cache"] = preview_cache
     if previous_cache is not None:
         previous_cache.cleanup()
-    return summary, run_pairs
+    return summary, run_pairs, input_sample_ids
 
 
 def main():
@@ -1898,7 +1903,7 @@ def main():
                 output_path,
             )
             if run_clicked:
-                summary, run_pairs = execute_leaf_analysis(
+                summary, run_pairs, input_sample_ids = execute_leaf_analysis(
                     lm, config, image_paths, uploaded_files, input_source,
                     output_path, results_path, execution_plan, worker_risk,
                     break_glass_is_unlocked, birefnet_parallel_is_unlocked,
@@ -1906,6 +1911,7 @@ def main():
                 if summary is not None:
                     st.session_state["last_run"] = {
                         "run_id": uuid.uuid4().hex,
+                        "input_sample_ids": input_sample_ids,
                         "succeeded": summary["succeeded"],
                         "failed": summary["failed"],
                         "total": summary["total"],
@@ -2583,12 +2589,13 @@ def render_threshold_explorer(pair, run, *, marked_pairs=None):
 
     target_path = pair["target_box"]
     try:
-        grayscale_image, otsu_cutoff = grayscale_sample(str(target_path))
-    except ValueError as exc:
+        target_mtime_ns = Path(target_path).stat().st_mtime_ns
+        grayscale_image, otsu_cutoff = grayscale_sample(str(target_path), target_mtime_ns)
+    except (OSError, ValueError) as exc:
         st.info(str(exc))
         return
     try:
-        color_image = color_sample(str(target_path))
+        color_image = color_sample(str(target_path), target_mtime_ns)
     except ValueError:
         color_image = None  # The mask panel still works without the color panel.
 
@@ -2634,12 +2641,17 @@ def render_threshold_explorer(pair, run, *, marked_pairs=None):
     )
     # Both images go to the browser, so the clean-size slider is live from 0.
     try:
-        clean_levels_image = clean_levels_for_threshold(str(target_path), cutoff, gap, margin)
+        clean_levels_image = clean_levels_for_threshold(
+            str(target_path), target_mtime_ns, cutoff, gap, margin,
+        )
         if pre_cleanup:
-            cleaned_image = pre_cleanup_sample(str(target_path), cutoff, margin, gap)
+            cleaned_image = pre_cleanup_sample(
+                str(target_path), target_mtime_ns, cutoff, margin, gap,
+            )
         else:
             cleaned_image = cleaned_sample(
-                str(target_path), cutoff, fill_holes=not remove_fill, clean_margin=margin,
+                str(target_path), target_mtime_ns, cutoff,
+                fill_holes=not remove_fill, clean_margin=margin,
             )
     except ValueError as exc:
         st.info(str(exc))
@@ -2793,7 +2805,7 @@ def render_mask_explorer(pair, run, method):
             )
             mask_status = "Pre-cleanup mask: edge margin cleared and stray pieces dropped"
         elif remove_fill:
-            mask_image = unfilled_sample(str(raw_path), margin)
+            mask_image = unfilled_sample(str(raw_path), raw_path.stat().st_mtime_ns, margin)
             mask_status = "Mask with hole filling removed and the edge margin cleared"
         else:
             shown_path = Path(pair.get("mask") or raw_path)
@@ -2804,8 +2816,9 @@ def render_mask_explorer(pair, run, method):
     color_image = None
     if pair.get("target_box"):
         try:
-            color_image = color_sample(str(pair["target_box"]))
-        except ValueError:
+            target_path = Path(pair["target_box"])
+            color_image = color_sample(str(target_path), target_path.stat().st_mtime_ns)
+        except (OSError, ValueError):
             pass  # The mask panel still works without the color panel.
     show_threshold_preview(
         key=component_key,
@@ -3126,12 +3139,20 @@ def render_training_dataset_export(run, methods):
             help="Keep repeated photos of the same plant or specimen in one split.",
         )
         group_content = group_file.getvalue() if group_file is not None else b""
+        pair_ids = {pair["sample_id"] for pair in pairs}
         try:
             groups = read_group_csv(group_content)
             split_counts(0, percentages)
+            input_ids = set(run.get("input_sample_ids", ())) or pair_ids
+            unknown = sorted(set(groups) - input_ids)
+            if unknown:
+                raise ValueError("Group CSV contains unknown sample IDs: " +
+                                 ", ".join(unknown[:5]))
+            export_groups = {sample_id: group for sample_id, group in groups.items()
+                             if sample_id in pair_ids}
             error = None
         except ValueError as exc:
-            groups = {}
+            export_groups = {}
             error = str(exc)
             st.error(error)
         candidates = sum(
@@ -3153,7 +3174,7 @@ def render_training_dataset_export(run, methods):
                     "This dataset may have no training or validation images. "
                     "Add more specimens or adjust the split before training."
                 )
-        if groups:
+        if export_groups:
             st.caption("Group assignments may change the exact split counts.")
         if dataset_format == "yolo-seg":
             st.caption(
@@ -3197,7 +3218,7 @@ def render_training_dataset_export(run, methods):
                     manifest = write_dataset_zip(
                         pairs, dest, dataset_format=dataset_format,
                         percentages=percentages, seed=seed, method=method,
-                        mask_source=mask_source, groups=groups,
+                        mask_source=mask_source, groups=export_groups,
                     )
             except (OSError, ValueError, zipfile.BadZipFile) as exc:
                 if dest is not None:

@@ -140,7 +140,7 @@ with st.container(border=True):
         "- Moderate tilt is fine. Blur, a missing marker, or a folded sheet is not."
     )
 
-with st.expander("Run these samples yourself", icon=":material/terminal:"):
+with st.expander("Run these samples yourself", expanded=True, icon=":material/terminal:"):
     if samples.samples_installed():
         st.markdown("**Command line**")
         st.markdown(
