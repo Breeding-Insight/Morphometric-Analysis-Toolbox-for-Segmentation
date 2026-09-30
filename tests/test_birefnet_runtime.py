@@ -24,6 +24,7 @@ def test_runtime_reports_missing_dependencies(monkeypatch):
 
 def test_local_loader_never_calls_auto_fetch_or_transformers(monkeypatch, tmp_path):
     pytest.importorskip("numpy")
+    torch = pytest.importorskip("torch")
     from mats import core, weights
 
     class FakeModel:
@@ -53,8 +54,8 @@ def test_local_loader_never_calls_auto_fetch_or_transformers(monkeypatch, tmp_pa
     monkeypatch.setitem(sys.modules, "mats.models.birefnet", fake_model_module)
     monkeypatch.setattr(weights, "require_local_weight", lambda name: tmp_path / "birefnet_leaf.pth")
     monkeypatch.setattr(weights, "ensure_weight", lambda name: pytest.fail("must not auto-fetch"))
-    monkeypatch.setattr(core.torch, "load", lambda *args, **kwargs: {"model_state_dict": {"local": 1}})
-    monkeypatch.setattr(core, "resolve_birefnet_device", lambda *_: core.torch.device("cpu"))
+    monkeypatch.setattr(torch, "load", lambda *args, **kwargs: {"model_state_dict": {"local": 1}})
+    monkeypatch.setattr(core, "resolve_birefnet_device", lambda *_: torch.device("cpu"))
     core._BIREFNET_MODELS.clear()
 
     model = core.get_birefnet_model()

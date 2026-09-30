@@ -40,9 +40,10 @@ env/
 .idea/
 
 # AI-assistant instructions.
-# Public and committed: AGENTS.md (the source of truth, read by Claude Code,
-# Codex, Cursor, Copilot, Gemini CLI, ...) and CLAUDE.md (a thin file that
-# imports it), so a fresh clone arrives with agent onboarding already in place.
+# Public and committed: AGENTS.md (the source of truth, read by Codex, Cursor,
+# Copilot, ...) plus CLAUDE.md and GEMINI.md (thin files that import it for
+# Claude Code and Gemini CLI, which don't read AGENTS.md on their own), so a
+# fresh clone arrives with agent onboarding already in place.
 # Private and never shipped: *.local.md working notes, which load alongside the
 # public files for whoever created them, and the local tool directories.
 CLAUDE.local.md

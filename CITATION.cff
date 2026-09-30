@@ -1,14 +1,20 @@
 cff-version: 1.2.0
-message: "If you use MATs, please cite the manuscript and the archived model weights."
-title: "MATs — Morphometric Analysis Tools"
+message: "If you use MATS, cite this software release and the companion manuscript when available."
+title: "Morphometric Analysis Toolbox for Segmentation (MATS)"
 abstract: >-
-  A two-model pipeline (RF-DETR fiducial-marker detection and BiRefNet leaf
-  segmentation) for extracting leaf area, length, and width in real-world units
-  from photographs of leaves on a printed calibration template.
+  Software for measuring leaf area, length, and width in physical units from
+  photographs taken on a printed calibration template. MATS detects fiducial
+  markers with RF-DETR, corrects perspective, and segments leaves with Otsu
+  thresholding by default or optional BiRefNet.
 type: software
+version: 1.0.0
 authors:
   - family-names: Ackerman
     given-names: A.J.
+  - family-names: Wiesner-Hanks
+    given-names: Tyr
+  - family-names: Reidel
+    given-names: Edwin
 license: MIT
 repository-code: "https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation"
 keywords:
@@ -18,8 +24,3 @@ keywords:
   - image segmentation
   - RF-DETR
   - BiRefNet
-# TODO(release): add the DOI minted on the Hugging Face weights repo (DataCite).
-# identifiers:
-#   - type: doi
-#     value: 10.57967/hf/XXXXXXX
-#     description: Model weights (Hugging Face)

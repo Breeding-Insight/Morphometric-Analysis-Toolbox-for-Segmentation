@@ -17,6 +17,12 @@ by `.lfsconfig` and is fetched only through an explicit setup action: via the
 
 BiRefNet architecture code is bundled with MATS at a pinned upstream revision,
 so a valid local checkpoint does not require Hugging Face access at inference time.
+The checkpoint and packaged sample-image hashes were verified from actual local
+files on 2026-09-25 and are listed together in [MANIFEST.sha256](../MANIFEST.sha256).
+From a checkout containing the real weights, run `shasum -a 256 -c MANIFEST.sha256`.
+A checkout containing LFS pointer files cannot pass the checkpoint checks.
+The Template Creator generates PDFs from code and user dimensions; no fixed PDF
+template is shipped as a reference file in this manifest.
 
 ## The key idea: PyTorch needs the bytes locally
 
@@ -89,6 +95,21 @@ directly — no per-user copy. For external collaborators without SCINet account
 a **Globus guest collection** on that directory lets them pull the files (they
 need a free Globus login).
 
+## Alternative transfer without Git LFS
+
+A verified checkpoint obtained from a separate archive can be placed under its
+canonical filename in `MATS_WEIGHTS_DIR` before running MATS. This already works
+with the current resolver; the archive need not be integrated into
+`mats fetch-weights`. To avoid LFS transfers during a clone, use
+`GIT_LFS_SKIP_SMUDGE=1 git clone ...`, then stage the real RF-DETR checkpoint in
+the weights directory and set `MATS_WEIGHTS_DIR` before starting MATS. Run
+`mats doctor` with `MATS_NO_AUTO_FETCH=1` and compare the staged file's SHA-256
+with the manifest above. BiRefNet remains an optional, explicit transfer.
+
+If the archive is Zenodo, verify that its file is the full `.pth` checkpoint and
+not an LFS pointer in an automatically archived GitHub source ZIP. Test the
+actual file URL and complete transfer from the intended institutional network.
+
 ## Git LFS
 
 Both checkpoints are committed to this repo via Git LFS. `weights/rf_detr_marker.pth`
@@ -132,9 +153,18 @@ Compare against the checksums in the table.
 
 ## Provenance and licensing
 
-- **RF-DETR** marker detector — fine-tuned from RF-DETR (Apache-2.0).
+- **RF-DETR** marker detector — MATS-fine-tuned from
+  [Roboflow RF-DETR](https://github.com/roboflow/rf-detr) (Apache-2.0 core
+  models; [RF-DETR paper](https://arxiv.org/abs/2511.09554)). The exact
+  upstream checkpoint variant and revision used for fine-tuning have not been
+  recorded here.
 - **BiRefNet** leaf segmenter — fine-tuned from
-  [`ZhengPeng7/BiRefNet`](https://huggingface.co/ZhengPeng7/BiRefNet) (MIT).
+  [`ZhengPeng7/BiRefNet`](https://huggingface.co/ZhengPeng7/BiRefNet) (MIT;
+  [BiRefNet paper](https://arxiv.org/abs/2401.03407)). Its bundled architecture
+  license is included at `src/mats/models/birefnet/LICENSE`.
 
 The redistributed checkpoints are derivative works of those base models; their
-upstream licenses apply.
+upstream licenses apply. The fine-tuning datasets, training code/configuration
+revisions, and any dataset-specific redistribution constraints have not yet
+been documented in this repository. MATS's MIT software license does not, by
+itself, establish the licensing of the checkpoints or training data.

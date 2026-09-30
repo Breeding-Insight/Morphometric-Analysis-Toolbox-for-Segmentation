@@ -8,16 +8,21 @@ Short answers for people who just cloned MATS. For the full reference see
 
 ## Installing
 
-**What do I need?** Python ≥ 3.9 and Git LFS. Apart from Git LFS the install
-pulls everything from wheels, with no conda environment and no other system
-libraries.
+**What do I need?** Python 3.10–3.13 (3.13 recommended) and Git LFS. Apart from
+Git LFS the install pulls everything from wheels, with no conda environment and
+no other system libraries. The `python3` built into macOS is 3.9 and won't
+work. If you're starting with no Python or Git at all, follow
+[install.md](install.md).
 
 ```bash
-git lfs install             # FIRST -- see the next question
+git lfs install                     # FIRST -- see the next question
 git clone https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation.git
 cd Morphometric-Analysis-Toolbox-for-Segmentation
-pip install -e ".[app]"     # ".[app]" adds the Streamlit app; drop it for CLI only
-mats doctor                 # confirms checkpoints, device, and QR decoders
+python3.13 -m venv .venv            # Windows: py -3.13 -m venv .venv
+source .venv/bin/activate           # Windows: .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[app]"   # ".[app]" adds the Streamlit app; drop it for CLI only
+mats doctor                         # confirms Python, checkpoints, device, and QR decoders
 ```
 
 **Why do I need Git LFS?** The RF-DETR marker checkpoint (~134 MB) is stored
@@ -57,16 +62,27 @@ checkpoint and the extra QR decoders are added only if your photographs need
 them.
 
 **Do I need conda?** No. `conda` works if you already use it
-(`environment.yml` is provided for clusters), but nothing requires it.
+(`environment.yml` is provided for clusters), but nothing requires it. The
+exception is a computer where you don't have administrator rights: Miniforge
+installs Python, Git, and Git LFS in your own folder (see
+[install.md](install.md#no-administrator-rights-any-operating-system)).
+
+**Why a virtual environment?** It gives MATS its own copy of Python and
+packages. That avoids the most common install failures: `pip` missing, an
+install into the system Python that leaves `mats` off your `PATH`, and
+`externally-managed-environment` errors. Activate it again in each new terminal
+with `source .venv/bin/activate` (Windows: `.venv\Scripts\Activate.ps1`).
 
 **Do I need `zbar`?** Only for the optional `pyzbar` QR fallback. OpenCV reads
 clear QR codes with no extra setup, and you can always enter the sheet size by
 hand instead.
 
-**`mats: command not found`** — the console script landed outside your `PATH`,
-usually from installing into a different interpreter. Check with
-`python -m pip show mats-morpho`, and use the same Python you installed with:
-`python -m mats.cli ...` works as a fallback.
+**`mats: command not found`** — most often the virtual environment isn't
+active in this terminal: `cd` into the MATS folder and run
+`source .venv/bin/activate` (Windows: `.venv\Scripts\Activate.ps1`). Otherwise
+the console script landed outside your `PATH`, usually from installing into a
+different interpreter. Check with `python -m pip show mats-morpho`, and use the
+same Python you installed with: `python -m mats.cli ...` works as a fallback.
 
 ---
 
@@ -125,7 +141,9 @@ you want when a batch mixes several template sizes.
 | Best for | Clean, high-contrast backgrounds (a leaf on plain white) | Cluttered or low-contrast backgrounds |
 
 Start with the default. Switch with `--mask-method birefnet` only if the masks
-disappoint you.
+disappoint you. To compare the two on your own photos, use `--mask-method both`
+(or check both methods in the app): every image is measured with each method,
+and each method gets its own results CSV.
 
 **How many workers?** `-w/--workers` applies to the threshold path. One worker
 uses CUDA/MPS when available; two or more switch to parallel CPU processing and
@@ -172,6 +190,14 @@ Full detail, checksums, and the complete resolution order: [weights.md](weights.
 **What comes out?** Per image, a perspective-corrected `{sample_id}_target_box.jpg`
 and a `{sample_id}_mask.png`, plus one measurements CSV and a
 `leaf_morpho_failures.csv` listing anything that warned or failed.
+Target-box and cleaned-mask files are optional, checked by default in the app;
+the failure log is also optional. Pre-cleanup masks, overlays, cutouts, and
+measurement axes can be requested in Setup or with CLI export flags. The
+pre-cleanup mask keeps holes and smaller objects. You may export separate Otsu
+and BiRefNet pre-cleanup masks in one run; only the measurement methods
+determine the CSV values. A BiRefNet export requires a locally available model.
+Measuring with both methods writes one results CSV and one failure log per
+method, suffixed `_threshold` and `_birefnet`.
 
 **Which columns?** `--csv-schema full` (the default) gives `sample_id`,
 `leaf_area_cm2`, `width_cm`, `length_cm`, `px_per_cm_width`, `px_per_cm_height`,
@@ -204,10 +230,11 @@ Run `mats doctor` first; it reports most of these.
 
 | Symptom | Fix |
 |---|---|
+| The install fails, or `pip` / `mats` is "command not found" | Look up the exact message in [install.md](install.md#7-if-something-goes-wrong) |
 | No markers detected, on a fresh clone | Check for a Git LFS placeholder first: `ls -l weights/rf_detr_marker.pth` should be ~134 MB. If it's ~134 bytes, run `git lfs install && git lfs pull --exclude="weights/birefnet_leaf.pth"` |
-| "QR code not read" | Pass the size yourself: `--sheet-dimensions 12x12in`. To add decoders: `pip install -e ".[qr]"` (plus the native `zbar` for pyzbar) |
+| "QR code not read" | Pass the size yourself: `--sheet-dimensions 12x12in`. To add decoders: `python -m pip install -e ".[qr]"` (plus the native `zbar` for pyzbar) |
 | No markers detected | Get all four markers in frame; print at 100 % scale in the template's marker colour |
-| Masks include the background | Try `--threshold-level low/medium/high`, or `--mask-method birefnet` |
+| Masks include the background | Try `--threshold-level low/medium/high` or a custom cutoff such as `--threshold-level 140`, or `--mask-method birefnet` |
 | CUDA out of memory | Only with BiRefNet — process fewer images at a time, or use the default `threshold` |
 | Very slow run | Use `threshold` and raise `-w/--workers` |
 | Blank page in Open OnDemand | Reverse-proxy `baseUrlPath` mismatch — see [deploy/ondemand/mats/README.md](../deploy/ondemand/mats/README.md) |

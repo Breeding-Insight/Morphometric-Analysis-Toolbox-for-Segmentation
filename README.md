@@ -3,27 +3,26 @@
 Measure leaf **area, length, and width** in real-world units from a photo of
 leaves laid on a printed calibration template.
 
-MATS has four main steps:
-1. Locate four fiducial markers using an RF-DETR detection model.
-2. Applies a transform to undo any perspective distortion.
-3. Segments each leaf, using either a fast Otsu threshold (default option) or a BiRefNet segmentation model for tougher backgrounds.
-4. Writes out a CSV of the measurements.
+MATS detects four fiducial markers with RF-DETR, corrects perspective, segments
+the leaf with Otsu thresholding by default or optional BiRefNet, and writes
+measurements to a CSV.
 
 > Companion code for the manuscript (target journal: *Plant Phenomics*).
 > BiRefNet is optional and runs entirely from a locally installed checkpoint (see [Model weights](#model-weights)).
 
-## Table of Contents  
+## Table of contents
 
-1. [Installation](#installation)  
-3. [Model weights](#model-weights)
-4. 2. [Setup??](#)
-
-5. [Outputs](#outputs)
-6. [Running on a compute cluster](#running-on-a-compute-cluster)
-7. [How it works](#how-it-works)
-8. [Troubleshooting](#troubleshooting)
-9. [Citing](#citing)
-10. [License](#license)
+- [Installation](#installation)
+- [Model weights](#model-weights)
+- [Running MATS](#running-mats)
+  - [Using the app](#using-the-app)
+  - [Using the command line](#using-the-command-line)
+- [Outputs](#outputs)
+- [Running on a compute cluster](#running-on-a-compute-cluster)
+- [How it works](#how-it-works)
+- [Troubleshooting](#troubleshooting)
+- [Reproducibility and citing](#reproducibility-and-citing)
+- [License](#license)
 
 ---
 
@@ -31,9 +30,15 @@ MATS has four main steps:
 
 ## Installation
 
-MATS requires Python ≥ 3.9 and **Git LFS**. Apart from Git LFS, the recommended
-`pip` installation method pulls all required packages from wheels with **no other
-system libraries and no conda required**.
+MATS requires **Python 3.10–3.13** (3.13 recommended) and **Git LFS**. Apart from
+Git LFS, the recommended `pip` installation method pulls all required packages
+from wheels with **no other system libraries and no conda required**.
+
+> **Starting on a computer with no Python or Git?** Follow
+> [docs/install.md](docs/install.md). It covers macOS, Windows, and Linux step by
+> step, including computers without administrator rights, and lists the common
+> error messages with their fixes. The `python3` built into macOS is 3.9, which
+> is too old.
 
 ### Step 1 — install Git LFS *before* cloning
 
@@ -53,14 +58,25 @@ git lfs install          # one-time setup, per machine
 
 ### Step 2 — clone and install
 
+Install into a virtual environment, so MATS has its own copy of Python:
+
 ```bash
 git clone https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation.git
 cd Morphometric-Analysis-Toolbox-for-Segmentation
-pip install -e ".[app]"                  # ".[app]" adds the Streamlit GUI
+python3.13 -m venv .venv                 # Windows: py -3.13 -m venv .venv
+source .venv/bin/activate                # Windows: .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[app]"        # ".[app]" adds the Streamlit GUI
+mats --version                           # confirm the installed release version
 ```
 
+Keep the `-e`: it lets MATS find the model in the folder you cloned. In each new
+terminal, activate the environment again (`source .venv/bin/activate`) before
+running `mats`.
+
 The clone brings the RF-DETR checkpoint with it. Confirm it is the real file and
-not a placeholder — it should be ~134 MB, not ~134 bytes:
+not a placeholder — it should be ~134 MB, not ~134 bytes (`ls -lh` shows `128M`,
+which is correct):
 
 ```bash
 ls -l weights/rf_detr_marker.pth
@@ -79,7 +95,7 @@ visible. For images with any issues affecting the QR codes (glare, skew, blur) y
 `pyzbar` requires the system library `zbar`:
 
 ```bash
-pip install -e ".[app,qr]"
+python -m pip install -e ".[app,qr]"
 ```
 
 This enables QReader without Conda. To enable the additional `pyzbar`
@@ -167,7 +183,7 @@ photographs require:
 | Clear QR codes with OpenCV | Yes | Nothing |
 | RF-DETR marker detection | Yes — checkpoint ships in the clone (Git LFS) | Nothing |
 | BiRefNet segmentation | No checkpoint | `mats fetch-weights --only birefnet --source lfs` |
-| Robust QR fallbacks | No | `pip install "mats-morpho[app,qr]"` |
+| Robust QR fallbacks | No | `python -m pip install "mats-morpho[app,qr]"` |
 
 QReader can download its detector model when that fallback is first used.
 pyzbar requires the native `zbar` library described above. The app's Preflight
@@ -236,10 +252,14 @@ Common options (full reference in [docs/cli.md](docs/cli.md)):
 | `-r, --results_path` | Measurement CSV path | `./leaf_morpho_results.csv` |
 | `--sheet-dimensions` | Finished Template Creator sheet size, `<w>x<h><unit>` | read from QR |
 | `-t, --template_dimensions` | Legacy/custom marker-centre calibration area | unused |
-| `--mask-method` | `birefnet` (accurate, GPU) or `threshold` (fast) | `threshold` |
-| `--threshold-level` | `auto` (Otsu) / `low` / `medium` / `high` | `auto` |
+| `--mask-method` | `birefnet` (accurate, GPU), `threshold` (fast), or `both` | `threshold` |
+| `--threshold-level` | `auto` (Otsu) / `low` / `medium` / `high`, or a custom cutoff `1`–`255` | `auto` |
 | `--csv-schema` | `full` (area/width/length + per-axis pixels-per-selected-unit) or `compact` | `full` |
 | `--results-unit` | Measurement-output unit: `mm`, `cm`, or `in` | `cm` |
+| `--measure-pre-cleanup` | Measure from raw binary masks before cleanup, minus the edge margin and stray pieces | off |
+| `--clean-margin` | With `--measure-pre-cleanup`: band cleared along the target-box edge, as a percent of its shorter side | `1` |
+| `--stray-gap` | With `--measure-pre-cleanup`: how far a piece may lie from the leaf, as a fraction of its bounding-box diagonal | `0.25` |
+| `--clean-size` | With `--measure-pre-cleanup`: remove specks and fill enclosed holes smaller than this radius in pixels (the app's **Clean size**) | `0` (off) |
 | `-w, --workers` | Parallel workers (threshold path only) | auto |
 | `--save-axes` | Also save length/width overlay images for QC | off |
 
@@ -248,7 +268,9 @@ no GPU, no extra download, and good for clean, high-contrast backgrounds where
 a leaf sits on plain white. `birefnet` is more accurate on cluttered or
 low-contrast backgrounds and uses a GPU when available (CPU works but is
 slow), at the cost of the ~2.65 GB checkpoint — fetch it once with
-`mats fetch-weights --only birefnet`.
+`mats fetch-weights --only birefnet`. To compare them, `--mask-method both`
+(or checking both methods in the app) measures every image with each method
+and writes one results CSV per method.
 
 ---
 
@@ -258,6 +280,31 @@ Per image, in the output folder:
 
 - `{sample_id}_target_box.jpg` — the perspective-corrected observation box
 - `{sample_id}_mask.png` — the leaf segmentation mask
+
+Both image exports are on by default and can be disabled with `--no-target-boxes`
+or `--no-masks`. Pre-cropped target-box inputs are not copied. Optional
+`--export pre-cleanup` saves each measurement method's binary mask before cleanup;
+`--pre-cleanup-methods both` runs Otsu/threshold and BiRefNet and saves their
+pre-cleanup masks separately. Only a `--mask-method` method determines
+measurements. BiRefNet exports require its checkpoint to be installed locally.
+With `--mask-method both`, each method's masks and QC images end in
+`_threshold` or `_birefnet` (for example `{sample_id}_mask_birefnet.png`).
+`--export overlay`, `--export cutout`, and `--export axes` add QC images; repeat
+the flag to request multiple kinds. The app offers the same choices in Setup.
+Use `--measure-pre-cleanup` (or **Measure from pre-cleanup masks** in the app)
+to calculate measurements from the raw binary segmentation. A thin band along
+the target-box edge, where the template's printed box outline lands, is cleared
+first (`--clean-margin`). The largest remaining object is taken as the leaf;
+other pieces that touch that band, or lie farther from the leaf than
+`--stray-gap` times its bounding-box diagonal, are dropped. Area counts the remaining foreground pixels, and width and length span
+their extent, so specks near the leaf can still affect the result; `--clean-size`
+(for example `--clean-size 3`) removes specks and fills enclosed holes whose
+inscribed radius is below that many pixels, without flash-filling the leaf. This choice
+is independent of `--export pre-cleanup`, which saves the mask with every piece.
+Each results CSV has a `.meta.json` companion recording the MATS version, input
+filenames, calibration input and successful per-image calibration, method, and
+effective Otsu mode/cutoff where used. Pre-cleanup runs also record their
+cleanup settings; saved app adjustments are recorded per specimen.
 
 Plus a measurements CSV. Choose `mm`, `cm` (the default), or `in` with
 `--results-unit` in the CLI or the **Result units** control in the app. The
@@ -280,7 +327,11 @@ it does not change calibration math. Two schemas:
   millimeters or inches selected, `cm` is replaced consistently in the
   measurement column names.
 
-A `leaf_morpho_failures.csv` records per-image warnings and failures.
+A `leaf_morpho_failures.csv` records per-image warnings and failures. With
+`--mask-method both` (or both methods checked in the app), each method writes its
+own results CSV and failure log with a method suffix, for example
+`leaf_morpho_results_birefnet.csv` and `leaf_morpho_failures_birefnet.csv`, in
+the same schema as a single-method run.
 
 > **Migration note:** earlier versions reported three isotropic scale
 > conventions (`*_meanscale`, `*_widthscale`, `*_heightscale`). Old CSVs remain
@@ -318,10 +369,15 @@ detail.
 Run `mats doctor` first — it reports most of these, and the [FAQ](docs/faq.md)
 covers the common questions in more detail.
 
+- **The install fails, or `mats` / `pip` is "command not found"** — look up the
+  exact message in the table in
+  [docs/install.md](docs/install.md#7-if-something-goes-wrong). Most install
+  failures come from a Python older than 3.10 (including the one built into
+  macOS) or from installing outside a virtual environment.
 - **QR code not read / measurements need a scale** — the default OpenCV decoder
   couldn't read the code. Pass the finished sheet size with
   `--sheet-dimensions` (e.g. `--sheet-dimensions 12x12in`), or add enhanced QR
-  reading: `pip install -e ".[qr]"` plus the
+  reading: `python -m pip install -e ".[qr]"` plus the
   `zbar` system lib (Linux: `apt install libzbar0`; macOS: `brew install zbar`;
   conda: `conda install -c conda-forge zbar`).
 - **CUDA out of memory** (only relevant with `--mask-method birefnet`) — process
@@ -340,15 +396,27 @@ covers the common questions in more detail.
 
 ## Working with an AI assistant
 
-This repository ships agent instructions in [AGENTS.md](AGENTS.md) (with a
-companion [CLAUDE.md](CLAUDE.md)), so a coding assistant you point at your clone
+This repository ships agent instructions in [AGENTS.md](AGENTS.md) (with
+companion [CLAUDE.md](CLAUDE.md) and [GEMINI.md](GEMINI.md) files for the tools
+that don't read AGENTS.md on their own), so a coding assistant you point at your clone
 — Claude Code, Codex, Cursor, Copilot, Gemini CLI — already knows how MATS is
 installed, run, and structured, and can help you troubleshoot a batch.
 
-## Citing
+## Reproducibility and citing
 
-If you use MATS, please cite the manuscript.
-See [CITATION.cff](CITATION.cff).
+For a published analysis, retain the MATS version (`mats --version`), the exact
+Git tag or commit, and the version-specific software DOI when available. Record
+the checkpoint filenames and SHA-256 hashes from [docs/weights.md](docs/weights.md),
+the segmentation method and threshold setting, the printed sheet dimensions or
+QR-derived calibration, and the source-image identifiers. Keep the results CSV,
+any failure CSV, and its `.meta.json` companion together. If you adjust an Otsu
+specimen in the app, retain the updated metadata and masks with the revised CSV.
+
+Please cite the MATS software release using [CITATION.cff](CITATION.cff) and
+the companion manuscript when its citation is available. A version-specific
+software DOI identifies the archived code; a separate weights DOI identifies
+the model files. The Python distribution is `mats-morpho`, and its command is
+`mats`.
 
 ## License
 

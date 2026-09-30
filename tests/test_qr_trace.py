@@ -152,6 +152,32 @@ def test_full_qr_csv_uses_only_available_backend_columns(monkeypatch, tmp_path):
     assert result["qr_backend_fields"] == fields
 
 
+def test_qr_calibration_is_preserved_for_each_sample(monkeypatch, tmp_path):
+    import json
+
+    monkeypatch.setattr(core, "available_qr_backend_fields", lambda: ("qr_opencv",))
+
+    def fake_process(*args):
+        row = core.measurement_na_row("leaf", "test")
+        row["qr_opencv"] = "success"
+        return "leaf", {
+            "sample_id": "leaf", "status": "ok", "result_row": row,
+            "calibration": {"source": "qr", "dimensions": [10.5, 9.5, "in"]},
+        }, None
+
+    monkeypatch.setattr(core, "_process_batch_image", fake_process)
+    results_path = tmp_path / "qr.csv"
+    core.run_leaf_morpho_batch(
+        ["leaf.jpg"], str(tmp_path), str(results_path),
+        template_dimensions=None, compact_csv=False, workers=1,
+    )
+    metadata = json.loads((tmp_path / "qr.csv.meta.json").read_text())
+    assert metadata["calibration_input"] == {"source": "qr"}
+    assert metadata["calibration_by_sample"] == {
+        "leaf": {"source": "qr", "dimensions": [10.5, 9.5, "in"]},
+    }
+
+
 def test_manual_and_compact_runs_omit_qr_trace_columns(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "available_qr_backend_fields", lambda: ("qr_opencv", "qr_qreader"))
     monkeypatch.setattr(core, "_process_batch_image", lambda *args: (

@@ -1,3 +1,8 @@
+[server]
+# Streamlit otherwise stops a first `mats app` at an optional "Email:" prompt,
+# which new users read as a hang. The browser still opens automatically.
+showEmailPrompt = false
+
 [theme]
 base = "light"
 primaryColor = "#1F6F5B"

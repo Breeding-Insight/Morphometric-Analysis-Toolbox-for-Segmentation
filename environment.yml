@@ -2,8 +2,11 @@
 # decodes QR codes with OpenCV and pulls everything from wheels, so a plain
 # virtualenv works too --
 #
-#   python -m venv .venv && source .venv/bin/activate
-#   pip install -e ".[app]"
+#   python3.13 -m venv .venv && source .venv/bin/activate
+#   python -m pip install --upgrade pip
+#   python -m pip install -e ".[app]"
+#
+# (Starting from a computer with no Python? See docs/install.md.)
 #
 # This file is a convenience for users who already prefer conda. It includes
 # `zbar` for the optional pyzbar QR fallback; neither Conda nor zbar is needed
@@ -11,9 +14,11 @@
 #
 #   conda env create -f environment.yml
 #   conda activate mats
-#   pip install -e ".[app,qr]"    # [qr] adds the pyzbar/qreader QR fallbacks
-#   mats fetch-weights
+#   python -m pip install -e ".[app,qr]"   # [qr] adds the pyzbar/qreader QR fallbacks
 #   mats doctor
+#
+# The clone already brings the RF-DETR checkpoint through Git LFS; run
+# `mats fetch-weights` only if `mats doctor` reports it missing.
 name: mats
 channels:
   - conda-forge

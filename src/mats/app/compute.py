@@ -121,12 +121,8 @@ def hybrid_fanout_disabled() -> bool:
 
 
 def selected_mask_method() -> str:
-    """Return the segmentation method selected on Home, defaulting to Otsu."""
-    return (
-        "birefnet"
-        if st.session_state.get("segmentation_method") == "BiRefNet"
-        else "threshold"
-    )
+    """Return the heaviest segmentation method checked on Home, defaulting to Otsu."""
+    return "birefnet" if st.session_state.get("segment_birefnet", False) else "threshold"
 
 
 def break_glass_unlocked(available_workers: int) -> bool:
