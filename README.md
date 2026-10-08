@@ -418,6 +418,16 @@ software DOI identifies the archived code; a separate weights DOI identifies
 the model files. The Python distribution is `mats-morpho`, and its command is
 `mats`.
 
+## Resource identification
+
+Morphometric Analysis Toolbox for Segmentation (MATS) is registered
+under RRID:SCR_029047.
+
+Registry record: https://scicrunch.org/resolver/RRID:SCR_029047
+
+When reporting analyses performed with MATS, include the software
+name, the version used, and RRID:SCR_029047 in the Methods section.
+
 ## License
 
 [MIT](LICENSE). The pipeline builds on RF-DETR (Apache-2.0) and BiRefNet (MIT);
