@@ -86,7 +86,7 @@ with st.container(border=True):
     )
     st.code(
         python_command("-m", "pip", "install", "mats-morpho[qr]"),
-        language=shell_language(),
+        language=shell_language(), wrap_lines=True,
     )
     source_root = source_install_root()
     if source_root is not None:
@@ -94,7 +94,7 @@ with st.container(border=True):
             st.caption(f"Source checkout: `{display_path(source_root)}`")
             st.code(
                 python_command("-m", "pip", "install", "-e", f"{source_root}[app,qr]"),
-                language=shell_language(),
+                language=shell_language(), wrap_lines=True,
             )
 
 with st.container(border=True):
@@ -104,11 +104,11 @@ with st.container(border=True):
         "only when MATS already runs in a Conda environment. Otherwise use your "
         "operating system's package manager."
     )
-    st.code("brew install zbar", language=shell_language())
+    st.code("brew install zbar", language=shell_language(), wrap_lines=True)
     st.caption("macOS with Homebrew")
-    st.code("sudo apt install libzbar0", language=shell_language())
+    st.code("sudo apt install libzbar0", language=shell_language(), wrap_lines=True)
     st.caption("Debian or Ubuntu")
-    st.code("conda install -c conda-forge zbar", language=shell_language())
+    st.code("conda install -c conda-forge zbar", language=shell_language(), wrap_lines=True)
     st.caption("Existing Conda environment only")
     st.info(
         "On shared or managed systems, ask your administrator to provide zbar. "
@@ -123,6 +123,8 @@ with st.container(border=True):
         "the app starts, so a browser refresh alone is not enough.",
         icon=":material/restart_alt:",
     )
-    st.code(mats_command("app"), language=shell_language())
+    st.code(mats_command("app"), language=shell_language(), wrap_lines=True)
     st.caption(f"MATS is currently running with: `{current_python()}`")
     st.caption("After restart, return here or run `mats doctor` to confirm the available decoders.")
+
+branding.render_funder_footer()

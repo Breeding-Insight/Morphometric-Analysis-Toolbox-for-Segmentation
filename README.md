@@ -22,6 +22,7 @@ measurements to a CSV.
 - [How it works](#how-it-works)
 - [Troubleshooting](#troubleshooting)
 - [Reproducibility and citing](#reproducibility-and-citing)
+- [Funding](#funding)
 - [License](#license)
 
 ---
@@ -417,6 +418,19 @@ the companion manuscript when its citation is available. A version-specific
 software DOI identifies the archived code; a separate weights DOI identifies
 the model files. The Python distribution is `mats-morpho`, and its command is
 `mats`.
+
+## Funding
+
+<p align="center">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="src/mats/app/assets/logos/breeding-insight-white.png"><img src="src/mats/app/assets/logos/breeding-insight.png" alt="Breeding Insight" height="44"></picture>&nbsp;&nbsp;&nbsp;
+  <picture><source media="(prefers-color-scheme: dark)" srcset="src/mats/app/assets/logos/usda-ars-white.png"><img src="src/mats/app/assets/logos/usda.png" alt="USDA Agricultural Research Service" height="44"></picture>&nbsp;&nbsp;&nbsp;
+  <picture><source media="(prefers-color-scheme: dark)" srcset="src/mats/app/assets/logos/uf-ifas-white.png"><img src="src/mats/app/assets/logos/uf-ifas.png" alt="University of Florida Institute of Food and Agricultural Sciences (UF/IFAS)" height="44"></picture>&nbsp;&nbsp;&nbsp;
+  <picture><source media="(prefers-color-scheme: dark)" srcset="src/mats/app/assets/logos/cornell-white.png"><img src="src/mats/app/assets/logos/cornell.png" alt="Cornell University" height="48"></picture>
+</p>
+
+Breeding Insight is funded by the U.S. Department of Agriculture (USDA)
+Agricultural Research Service (ARS) through University of Florida/IFAS.
+Formerly at Cornell University.
 
 ## License
 

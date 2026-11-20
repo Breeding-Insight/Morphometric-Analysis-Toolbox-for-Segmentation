@@ -38,3 +38,5 @@ else:
         lm, config, *inputs, compute, plan, risk, break_glass_unlocked(workers),
     )
     render_diagnostics(compute, plan, config, checks)
+
+branding.render_funder_footer()

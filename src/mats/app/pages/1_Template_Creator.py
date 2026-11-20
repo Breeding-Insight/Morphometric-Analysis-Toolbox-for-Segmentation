@@ -221,3 +221,5 @@ if (
         "Print the PDF at 100% scale. If you edit the IDML, do not move the "
         "markers independently or scale the page artwork."
     )
+
+branding.render_funder_footer()

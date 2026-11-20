@@ -114,7 +114,12 @@ for sample_set in samples.SAMPLE_SETS:
     with st.container(border=True):
         st.markdown(f"**{sample_set['title']}**")
         if photo:
-            st.image(str(photo), caption=photo.name, width=420)
+            st.image(
+                str(photo),
+                caption=photo.name,
+                width=420,
+                alt=f"Sample photo: {sample_set['title']}, a leaf on a printed MATS template",
+            )
         else:
             st.info(
                 "The packaged sample images are not installed in this "
@@ -163,7 +168,7 @@ with st.expander("Run these samples yourself", expanded=True, icon=":material/te
                 )
                 for sample_set in samples.SAMPLE_SETS
             ),
-            language=shell_language(),
+            language=shell_language(), wrap_lines=True,
         )
         st.caption(
             f"Sample images: `{display_path(samples.SAMPLES_DIR)}` · "
@@ -186,7 +191,7 @@ with st.expander("Run these samples yourself", expanded=True, icon=":material/te
                 "-o",
                 output_root / "qr_demo",
             ),
-            language=shell_language(),
+            language=shell_language(), wrap_lines=True,
         )
         st.markdown("**In the app**")
         st.markdown(
@@ -241,7 +246,12 @@ with st.container(border=True):
     st.markdown("**When the QR can't be read**")
     qr_failure_photo = samples.qr_failure_sample_path()
     if qr_failure_photo:
-        st.image(str(qr_failure_photo), caption=qr_failure_photo.name, width=420)
+        st.image(
+            str(qr_failure_photo),
+            caption=qr_failure_photo.name,
+            width=420,
+            alt="Sample photo: a field leaf on a MATS template whose QR code cannot be decoded",
+        )
     else:
         st.info(
             "The packaged QR-failure sample is not installed in this "
@@ -452,3 +462,5 @@ with st.container(border=True):
         "https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation/issues\n"
         "- **Citing MATS** — see `CITATION.cff` in the repository."
     )
+
+branding.render_funder_footer()
