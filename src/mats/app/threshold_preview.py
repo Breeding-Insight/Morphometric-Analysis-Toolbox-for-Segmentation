@@ -25,7 +25,8 @@ _PREVIEW_HTML = """
   <div class="mats-clean-control" hidden>
     <div class="mats-clean-label">
       <label for="mats-clean-range">Clean size: <output class="mats-clean-value"></output> px</label>
-      <span class="mats-help" tabindex="0" aria-label="About clean size">
+      <span class="mats-help" role="button" tabindex="0" aria-label="About clean size"
+        aria-describedby="mats-clean-help">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2 2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z"/></svg>
         <span id="mats-clean-help" class="mats-help-tip" role="tooltip"></span>
       </span>
@@ -91,6 +92,8 @@ _PREVIEW_CSS = """
   opacity: .6; cursor: help; border-radius: 50%;
 }
 .mats-help:hover, .mats-help:focus-visible { opacity: 1; }
+.mats-threshold-preview input:focus-visible,
+.mats-help:focus-visible { outline: 2px solid var(--st-primary-color); outline-offset: 2px; }
 .mats-help-tip {
   position: absolute; left: 0; bottom: calc(100% + .4rem); z-index: 10;
   width: max-content; max-width: 20rem; padding: .5rem .65rem;

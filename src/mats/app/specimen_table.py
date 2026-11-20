@@ -26,14 +26,15 @@ _TABLE_CSS = """
 .mats-specimen-table th {
   position: sticky; top: 0; z-index: 1; padding: 0; text-align: left; font-weight: 400;
   vertical-align: bottom;
-  color: color-mix(in srgb, var(--st-text-color) 65%, transparent);
+  color: #5F6C66;  /* theme grayColor: 4.9:1 on the header fill (65% text was 4.3:1) */
   background: var(--st-dataframe-header-background-color, var(--st-secondary-background-color));
   border-bottom: 1px solid var(--st-dataframe-border-color, var(--st-border-color));
 }
 .mats-specimen-table th button {
   all: unset; box-sizing: border-box; width: 100%; padding: .45rem .6rem; cursor: pointer;
 }
-.mats-specimen-table th button:focus-visible { outline: 2px solid var(--st-primary-color); }
+.mats-specimen-table th button:focus-visible,
+.mats-specimen-table input:focus-visible { outline: 2px solid var(--st-primary-color); outline-offset: 2px; }
 .mats-specimen-table td {
   padding: .4rem .6rem; white-space: nowrap;
   border-bottom: 1px solid var(--st-dataframe-border-color, var(--st-border-color));

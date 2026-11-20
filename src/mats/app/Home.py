@@ -175,7 +175,7 @@ _WORKBENCH_STYLES = """
     color: #FFFFFF;
 }
 .st-key-analysis_workspace_tab [data-testid="stTab"]:focus-visible {
-    outline: 0.2rem solid #8DB99A;
+    outline: 0.2rem solid #1F6F5B;
     outline-offset: 0.15rem;
 }
 .st-key-analysis_workspace_tab .react-aria-SelectionIndicator,
@@ -220,7 +220,8 @@ _WORKBENCH_STYLES = """
     text-transform: uppercase;
 }
 .st-key-launch_analysis [data-testid="stButton"] button[data-testid="stBaseButton-primary"]:not(:disabled) {
-    background: linear-gradient(135deg, #1F6F5B 0%, #2C9475 58%, #43B28A 100%) !important;
+    /* Both ends keep white text at >= 4.5:1 (6.0 -> 4.8). */
+    background: linear-gradient(135deg, #1F6F5B 0%, #24806A 100%) !important;
     border: 2px solid #155344 !important;
     box-shadow: 0 0.42rem 0 #0E4034,
         0 0.82rem 1.35rem rgba(31, 111, 91, 0.28) !important;
@@ -233,7 +234,8 @@ _WORKBENCH_STYLES = """
     color: #FFFFFF !important;
 }
 .st-key-launch_analysis [data-testid="stButton"] button[data-testid="stBaseButton-primary"]:not(:disabled):hover {
-    background: linear-gradient(135deg, #277F69 0%, #37A784 58%, #55C99E 100%) !important;
+    /* Hover darkens rather than lightens, so white text stays >= 6:1. */
+    background: linear-gradient(135deg, #195A4A 0%, #1F6F5B 100%) !important;
     box-shadow: 0 0.52rem 0 #0E4034,
         0 1.05rem 1.6rem rgba(31, 111, 91, 0.32) !important;
     transform: translateY(-0.14rem) scale(1.008);
@@ -256,7 +258,7 @@ _WORKBENCH_STYLES = """
     color: #526A5A !important;
 }
 .st-key-launch_analysis [data-testid="stButton"] button[data-testid="stBaseButton-primary"]:focus-visible {
-    outline: 0.24rem solid #78A284 !important;
+    outline: 0.24rem solid #1F6F5B !important;
     outline-offset: 0.22rem !important;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -771,6 +773,13 @@ def render_workspace_context(config, execution_plan):
             ),
             color="green" if execution_plan.uses_gpu else "orange",
         )
+
+
+def _accessible_chart(chart):
+    """Axis and legend text at >= 4.5:1 (Streamlit's chart theme gray is 3.6:1)."""
+    return chart.configure_axis(
+        labelColor="#5F6C66", titleColor="#20302A"
+    ).configure_legend(labelColor="#5F6C66", titleColor="#20302A")
 
 
 def render_file_sidebar():
@@ -2118,7 +2127,7 @@ def render_results(lm):
                 )
                 .interactive()
             )
-            st.altair_chart(relationship_chart, width="stretch")
+            st.altair_chart(_accessible_chart(relationship_chart), width="stretch")
 
         with distribution_column.container(border=True):
             st.markdown("**Leaf Area Distribution**")
@@ -2137,7 +2146,7 @@ def render_results(lm):
                     ],
                 )
             )
-            st.altair_chart(distribution_chart, width="stretch")
+            st.altair_chart(_accessible_chart(distribution_chart), width="stretch")
 
         if "scale_aspect_ratio" in measurements:
             scale_ratio = measurements["scale_aspect_ratio"].dropna()
