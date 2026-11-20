@@ -73,6 +73,7 @@ where = ["src"]
 mats = [
     "app/.streamlit/config.toml",
     "app/assets/*.svg",
+    "app/assets/logos/*.png",
     "app/assets/samples/*.md",
     "app/assets/samples/*/*.jpg",
     "models/birefnet/LICENSE",

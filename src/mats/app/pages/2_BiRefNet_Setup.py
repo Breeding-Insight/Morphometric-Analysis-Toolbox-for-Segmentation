@@ -130,3 +130,5 @@ with st.expander("Manual and HPC installation"):
         "- On air-gapped systems, pre-stage the checkpoint and verify its SHA-256 before "
         "launching MATS."
     )
+
+branding.render_funder_footer()

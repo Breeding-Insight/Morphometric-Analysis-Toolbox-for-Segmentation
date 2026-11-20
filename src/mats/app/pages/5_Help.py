@@ -462,3 +462,5 @@ with st.container(border=True):
         "https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation/issues\n"
         "- **Citing MATS** — see `CITATION.cff` in the repository."
     )
+
+branding.render_funder_footer()

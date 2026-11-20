@@ -1855,12 +1855,14 @@ def main():
             "(rfdetr, transformers, torch, opencv) and relaunch."
         )
         st.caption(f"Current interpreter: `{current_python()}`")
+        branding.render_funder_footer()
         st.stop()
     except Exception as exc:
         st.error(f"Failed to import the MATS pipeline: {exc}")
         with st.expander("Traceback"):
             st.code(traceback.format_exc())
         st.caption(f"Current interpreter: `{current_python()}`")
+        branding.render_funder_footer()
         st.stop()
 
     input_source, uploaded_files, input_dir, output_dir = render_file_sidebar()
@@ -1960,6 +1962,8 @@ def main():
     elif adjust_tab.open:
         with adjust_tab:
             render_adjust_workspace()
+
+    branding.render_funder_footer()
 
 
 def render_results(lm):

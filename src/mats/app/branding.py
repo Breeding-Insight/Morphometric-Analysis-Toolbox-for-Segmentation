@@ -1,12 +1,112 @@
 """Shared MATS branding for the Streamlit pages."""
 
+import base64
+from datetime import date
+from functools import lru_cache
+from html import escape
 from pathlib import Path
 
 import streamlit as st
 
+from mats import __version__
+
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 LOGO_WIDE = ASSETS_DIR / "mats_logo_horizontal_circles_color.svg"
 LOGO_MARK = ASSETS_DIR / "mats_mark_circles_color.svg"
+LOGOS_DIR = ASSETS_DIR / "logos"
+
+FUNDING_STATEMENT = (
+    "Breeding Insight is funded by the U.S. Department of Agriculture (USDA) "
+    "Agricultural Research Service (ARS) through University of Florida/IFAS. "
+    "Formerly at Cornell University."
+)
+
+# White logos for the dark footer band, as on Breeding Insight's other app
+# landing pages (e.g. AlloMate). (file, alt text naming the organization,
+# display height in px)
+FUNDER_LOGOS = (
+    ("breeding-insight-white.png", "Breeding Insight", 56),
+    ("usda-ars-white.png", "USDA Agricultural Research Service", 44),
+    ("uf-ifas-white.png", "University of Florida Institute of Food and Agricultural Sciences (UF/IFAS)", 44),
+    ("cornell-white.png", "Cornell University", 44),
+)
+
+FOOTER_LINKS = (
+    ("About Breeding Insight", "https://breedinginsight.org/about-bi/"),
+    ("Contact us", "https://breedinginsight.org/contact-us/"),
+    ("Source code", "https://github.com/Breeding-Insight/Morphometric-Analysis-Toolbox-for-Segmentation"),
+)
+
+# Footer band #12483B (a dark green already used in Home.py). White text is
+# 10.4:1 on it and the muted #D4E4DA is 7.9:1.
+_FUNDER_FOOTER_CSS = """
+<style>
+.mats-funder-footer {
+    background: #12483B;
+    border-radius: 0.75rem;
+    color: #FFFFFF;
+    margin-top: 3rem;
+    padding: 1.75rem 1.5rem 1.25rem;
+}
+.mats-funder-logos {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem 3rem;
+    justify-content: center;
+    list-style: none;
+    margin: 0 0 1.25rem !important;
+    padding: 0 !important;
+}
+.mats-funder-logos li { margin: 0 !important; padding: 0 !important; }
+.mats-funder-logos li::marker { content: none; }
+.mats-funder-logos img { display: block; max-width: 100%; width: auto; }
+.mats-funder-footer .mats-funding {
+    color: #FFFFFF;
+    font-size: 1rem;
+    font-weight: 500;
+    line-height: 1.6;
+    margin: 0 auto 1rem;
+    max-width: none;  /* one or two lines at desktop widths */
+    text-align: center;
+}
+.mats-footer-bottom {
+    border-top: 1px solid rgba(212, 228, 218, 0.35);
+    color: #D4E4DA;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.9rem;
+    gap: 0.75rem 1.5rem;
+    justify-content: space-between;
+    padding-top: 0.9rem;
+}
+.mats-footer-bottom p { color: #D4E4DA; margin: 0; }
+.mats-footer-bottom ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+    list-style: none;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+.mats-footer-bottom li { margin: 0 !important; padding: 0 !important; }
+.mats-footer-bottom li::marker { content: none; }
+.mats-funder-footer a { color: #FFFFFF !important; text-decoration: underline; text-underline-offset: 3px; }
+.mats-funder-footer a:hover { color: #D4E4DA !important; }
+.mats-funder-footer a:focus-visible { outline: 2px solid #FFFFFF !important; outline-offset: 3px !important; }
+.mats-visually-hidden {
+    border: 0; clip: rect(0 0 0 0); height: 1px; margin: -1px; overflow: hidden;
+    padding: 0; position: absolute; white-space: nowrap; width: 1px;
+}
+@media (max-width: 640px) {
+    .mats-funder-footer { padding: 2rem 1rem 1.25rem; }
+    .mats-funder-logos { gap: 1.25rem 2rem; }
+    .mats-funder-logos img { max-height: 36px; }
+    .mats-funder-logos li:first-child img { max-height: 46px; }
+    .mats-footer-bottom { justify-content: center; text-align: center; }
+}
+</style>
+"""
 
 # st.logo's biggest built-in size ("large") renders at 2rem; override it to
 # stay legible at header scale.
@@ -152,6 +252,52 @@ label:has(> input[type="radio"]:focus-visible) {
 }
 </style>
 """
+
+
+@lru_cache(maxsize=None)
+def _data_uri(path):
+    return "data:image/png;base64," + base64.b64encode(Path(path).read_bytes()).decode("ascii")
+
+
+def funder_footer_html():
+    """HTML for the funder footer band: logos, funding statement, links."""
+    items = []
+    for filename, alt, height in FUNDER_LOGOS:
+        path = LOGOS_DIR / filename
+        if path.is_file():
+            items.append(
+                f'<li><img src="{_data_uri(str(path))}" alt="{escape(alt)}" '
+                f'style="height:{height}px"></li>'
+            )
+    logos = (
+        f'<ul class="mats-funder-logos" aria-label="Breeding Insight and its funders">{"".join(items)}</ul>'
+        if items
+        else ""
+    )
+    links = "".join(
+        f'<li><a href="{escape(url)}" target="_blank" rel="noopener noreferrer">{escape(label)}'
+        '<span class="mats-visually-hidden"> (opens in a new tab)</span></a></li>'
+        for label, url in FOOTER_LINKS
+    )
+    bottom = (
+        '<div class="mats-footer-bottom">'
+        f"<p>&copy; {date.today().year} Breeding Insight &middot; MATS {escape(__version__)}</p>"
+        f'<ul aria-label="Breeding Insight links">{links}</ul>'
+        "</div>"
+    )
+    return (
+        f'{_FUNDER_FOOTER_CSS}<footer class="mats-funder-footer">'
+        f'{logos}<p class="mats-funding">{escape(FUNDING_STATEMENT)}</p>{bottom}</footer>'
+    )
+
+
+def render_funder_footer():
+    """Render the funder logos and funding statement at the bottom of a page.
+
+    Lives in the main area rather than the sidebar, which is collapsed on
+    phones, so it is visible at every width.
+    """
+    st.html(funder_footer_html())
 
 
 def page_icon():

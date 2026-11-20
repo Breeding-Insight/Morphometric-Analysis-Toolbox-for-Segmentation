@@ -126,3 +126,5 @@ with st.container(border=True):
     st.code(mats_command("app"), language=shell_language(), wrap_lines=True)
     st.caption(f"MATS is currently running with: `{current_python()}`")
     st.caption("After restart, return here or run `mats doctor` to confirm the available decoders.")
+
+branding.render_funder_footer()

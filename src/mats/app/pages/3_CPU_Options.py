@@ -52,9 +52,11 @@ try:
     lm = load_pipeline_module()
 except ModuleNotFoundError as exc:
     st.error(f"Failed to import the MATS pipeline: missing dependency `{exc.name or exc}`.")
+    branding.render_funder_footer()
     st.stop()
 except Exception as exc:
     st.error(f"Failed to import the MATS pipeline: {exc}")
+    branding.render_funder_footer()
     st.stop()
 
 mask_method = selected_mask_method()
@@ -208,3 +210,5 @@ with st.expander("Advanced execution overrides", icon=":material/tune:"):
     if st.button("Restore automatic defaults", icon=":material/refresh:", width="content"):
         restore_automatic_compute()
         st.rerun()
+
+branding.render_funder_footer()
